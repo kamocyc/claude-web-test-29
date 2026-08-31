@@ -1,0 +1,129 @@
+:root {
+  --bg: #0d1117;
+  --panel: #161b22;
+  --border: #262d36;
+  --text: #d5dae1;
+  --muted: #8b949e;
+  --accent: #ffe066;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.5 system-ui, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  overflow: hidden;
+}
+
+#hud {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.hud-clock {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  min-width: 130px;
+}
+
+.hud-stats {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.hud-warning {
+  color: #ff6b78;
+  flex: 1;
+  text-align: right;
+}
+
+.hud-group { display: flex; gap: 4px; }
+
+button {
+  background: #1f2630;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 9px;
+  font: inherit;
+  cursor: pointer;
+}
+button:hover { background: #2a323e; }
+button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #1a1a1a;
+  font-weight: 600;
+}
+
+main {
+  display: flex;
+  height: calc(100% - 45px);
+  overflow: hidden;
+}
+
+#map {
+  flex: 1;
+  /* A canvas carries its pixel buffer as its intrinsic width, and a flex item
+     will not shrink below that by default -- so without this the canvas pushes
+     the page wider than the viewport and squeezes the inspector off-screen. */
+  min-width: 0;
+  display: block;
+  cursor: crosshair;
+}
+
+#inspector {
+  width: 280px;
+  flex: none;
+  padding: 12px 14px;
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+}
+
+#inspector h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.follow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  margin-bottom: 10px;
+  cursor: pointer;
+}
+
+.empty { color: var(--muted); }
+
+dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 10px;
+  margin: 0;
+}
+dt { color: var(--muted); white-space: nowrap; }
+dd { margin: 0; font-variant-numeric: tabular-nums; }
+
+.speed-bar {
+  margin-top: 10px;
+  height: 6px;
+  background: #232a34;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.speed-bar div {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.1s linear;
+}
