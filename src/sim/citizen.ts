@@ -6,7 +6,9 @@ import {
   type BuildingId,
   type CitizenId,
   type TileIndex,
+  type TrainId,
 } from '../core/types';
+import type { RideLeg } from './transitPlanner';
 
 export interface Citizen {
   id: CitizenId;
@@ -45,6 +47,21 @@ export interface Citizen {
   awaitingPath: boolean;
   /** Retry countdown after a failed route, so stranded citizens do not spin. */
   retryAtTick: number;
+
+  // --- Transit -------------------------------------------------------------
+  // A transit trip is three legs: walk to the platform, ride, walk to the door.
+  // `path` always holds the leg being walked or driven right now, so the whole
+  // movement system stays unaware that trains exist; these fields hold the
+  // rest of the itinerary until it is that leg's turn.
+
+  /** The ride this citizen is waiting for or taking. Null when not on transit. */
+  ride: RideLeg | null;
+  /** Walking path from the alighting station to the door, held during the ride. */
+  legAfterRide: TileIndex[] | null;
+  /** Train currently aboard, or -1. */
+  boardedTrain: TrainId;
+  /** Tick the citizen reached the platform, for the "waited N min" readout. */
+  waitStartTick: number;
 }
 
 const FAMILY = [
@@ -83,6 +100,10 @@ export function createCitizen(
     tripStartTick: 0,
     awaitingPath: false,
     retryAtTick: 0,
+    ride: null,
+    legAfterRide: null,
+    boardedTrain: -1,
+    waitStartTick: 0,
   };
 }
 
@@ -93,6 +114,11 @@ export function scheduleJitter(id: CitizenId, salt: number): number {
 
 export function isTravelling(c: Citizen): boolean {
   return c.state === CitizenState.ToWork || c.state === CitizenState.ToHome;
+}
+
+/** True while the citizen is moving under their own steam along `path`. */
+export function isSelfPropelled(c: Citizen): boolean {
+  return isTravelling(c) && c.path !== null;
 }
 
 

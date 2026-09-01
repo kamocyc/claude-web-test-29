@@ -1,22 +1,21 @@
 import { PATH_CACHE_SIZE } from '../config';
 import { manhattan, neighbor } from '../core/grid';
 import { Direction, type TileIndex } from '../core/types';
-import type { RoadNetwork } from '../world/roadNetwork';
-import type { TileMap } from '../world/tileMap';
+import type { TileNetwork } from '../world/tileNetwork';
 
 /**
- * A* over road tiles. Costs are free-flow only -- congestion is deliberately
- * left out so that routes stay cacheable and citizens can actually get stuck
- * in the jams the player creates, which is the point of watching them.
+ * A* over a tile network -- roads or rails, the structure is the same. Costs
+ * are free-flow only: congestion is deliberately left out so that routes stay
+ * cacheable and citizens can actually get stuck in the jams the player
+ * creates, which is the point of watching them.
  */
-export function findRoadPath(
-  map: TileMap,
-  roads: RoadNetwork,
+export function findPath(
+  network: TileNetwork,
   start: TileIndex,
   goal: TileIndex,
 ): TileIndex[] | null {
   if (start < 0 || goal < 0) return null;
-  if (!map.isRoad(start) || !map.isRoad(goal)) return null;
+  if (!network.has(start) || !network.has(goal)) return null;
   if (start === goal) return [start];
 
   const open: TileIndex[] = [start];
@@ -46,7 +45,7 @@ export function findRoadPath(
 
     const g = gScore.get(current) ?? Infinity;
     for (let dir = 0; dir < 4; dir++) {
-      if (!roads.connects(current, dir as Direction)) continue;
+      if (!network.connects(current, dir as Direction)) continue;
       const next = neighbor(current, dir as Direction);
       if (next < 0 || closed.has(next)) continue;
 
@@ -75,8 +74,8 @@ function reconstruct(cameFrom: Map<TileIndex, TileIndex>, end: TileIndex): TileI
 
 /**
  * Home<->work round trips dominate, so a plain insertion-ordered Map used as
- * an LRU gets a very high hit rate. The whole cache is dropped when the road
- * graph changes: partial invalidation is not worth the bookkeeping.
+ * an LRU gets a very high hit rate. The whole cache is dropped when the
+ * underlying graph changes: partial invalidation is not worth the bookkeeping.
  */
 export class PathCache {
   private entries = new Map<string, TileIndex[] | null>();
@@ -86,13 +85,13 @@ export class PathCache {
   misses = 0;
 
   get(
-    roads: RoadNetwork,
+    network: TileNetwork,
     key: string,
     compute: () => TileIndex[] | null,
   ): TileIndex[] | null {
-    if (this.version !== roads.version) {
+    if (this.version !== network.version) {
       this.entries.clear();
-      this.version = roads.version;
+      this.version = network.version;
     }
 
     if (this.entries.has(key)) {

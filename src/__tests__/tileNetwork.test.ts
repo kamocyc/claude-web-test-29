@@ -9,7 +9,7 @@ function flatWorld(): World {
   return w;
 }
 
-describe('roadNetwork', () => {
+describe('tileNetwork (roads)', () => {
   it('links neighbouring road tiles in both directions', () => {
     const w = flatWorld();
     w.placeRoad(idx(10, 10));

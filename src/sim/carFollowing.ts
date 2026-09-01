@@ -4,7 +4,45 @@ import {
   CAR_DECEL_MAX,
   CAR_LENGTH,
   CAR_MIN_GAP,
+  TRAIN_ACCEL,
+  TRAIN_DECEL_COMFORT,
+  TRAIN_FREE_SPEED,
+  TRAIN_LENGTH,
+  TRAIN_MIN_GAP,
 } from '../config';
+
+/**
+ * The parameters a following vehicle obeys. Cars and trains run the exact same
+ * model with different numbers -- which is why a train pulls out of a platform
+ * and eases into the next one as smoothly as a car does at a junction.
+ */
+export interface FollowingProfile {
+  freeSpeed: number;
+  accel: number;
+  decelComfort: number;
+  decelMax: number;
+  length: number;
+  minGap: number;
+}
+
+export const CAR_PROFILE: FollowingProfile = {
+  freeSpeed: 0,
+  accel: CAR_ACCEL,
+  decelComfort: CAR_DECEL_COMFORT,
+  decelMax: CAR_DECEL_MAX,
+  length: CAR_LENGTH,
+  minGap: CAR_MIN_GAP,
+};
+
+export const TRAIN_PROFILE: FollowingProfile = {
+  freeSpeed: TRAIN_FREE_SPEED,
+  accel: TRAIN_ACCEL,
+  decelComfort: TRAIN_DECEL_COMFORT,
+  // Trains have no emergency stop worth modelling; comfort braking is the cap.
+  decelMax: TRAIN_DECEL_COMFORT,
+  length: TRAIN_LENGTH,
+  minGap: TRAIN_MIN_GAP,
+};
 
 /**
  * The car-following model. Pure functions over scalars, so the interesting
@@ -26,10 +64,9 @@ import {
  * `v^2/(2a) <= d` accounts for that first step, and is the difference between
  * cars that stop on the line and cars that creep through it every time.
  */
-export function brakingSpeed(distance: number): number {
+export function brakingSpeed(distance: number, decel = CAR_DECEL_COMFORT): number {
   if (distance <= 0) return 0;
-  const a = CAR_DECEL_COMFORT;
-  return Math.sqrt(a * a + 2 * a * distance) - a;
+  return Math.sqrt(decel * decel + 2 * decel * distance) - decel;
 }
 
 /**
@@ -41,9 +78,14 @@ export function desiredSpeed(
   freeSpeed: number,
   gapToLeader: number,
   distanceToStop: number,
+  profile: FollowingProfile = CAR_PROFILE,
 ): number {
-  const clearance = gapToLeader - CAR_LENGTH - CAR_MIN_GAP;
-  return Math.min(freeSpeed, brakingSpeed(clearance), brakingSpeed(distanceToStop));
+  const clearance = gapToLeader - profile.length - profile.minGap;
+  return Math.min(
+    freeSpeed,
+    brakingSpeed(clearance, profile.decelComfort),
+    brakingSpeed(distanceToStop, profile.decelComfort),
+  );
 }
 
 /**
@@ -51,11 +93,16 @@ export function desiredSpeed(
  * snapping to the target is the whole reason cars pull away and slow down
  * smoothly instead of teleporting between speeds.
  */
-export function stepSpeed(current: number, desired: number, freeSpeed: number): number {
+export function stepSpeed(
+  current: number,
+  desired: number,
+  freeSpeed: number,
+  profile: FollowingProfile = CAR_PROFILE,
+): number {
   const delta = desired - current;
   const applied = delta >= 0
-    ? Math.min(delta, CAR_ACCEL)
-    : Math.max(delta, -CAR_DECEL_MAX);
+    ? Math.min(delta, profile.accel)
+    : Math.max(delta, -profile.decelMax);
   return Math.min(freeSpeed, Math.max(0, current + applied));
 }
 

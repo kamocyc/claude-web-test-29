@@ -42,6 +42,11 @@ export class Occupancy {
     return this.tiles[tile] ?? EMPTY;
   }
 
+  /** Tiles holding at least one car this tick. */
+  get dirtyTiles(): readonly TileIndex[] {
+    return this.dirty;
+  }
+
   /**
    * Cars that block entry to a tile: same heading (a queue ahead of us) and
    * perpendicular headings (crossing traffic we must yield to). The opposing

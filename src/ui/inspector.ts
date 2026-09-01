@@ -1,4 +1,4 @@
-import { CAR_FREE_SPEED } from '../config';
+import { CAR_FREE_SPEED, TRAIN_CAPACITY } from '../config';
 import { ticksToMinutes } from '../core/clock';
 import { tileX, tileY } from '../core/grid';
 import { BuildingType, CitizenState, TravelMode } from '../core/types';
@@ -47,7 +47,7 @@ export class Inspector {
   update(sim: Simulation): void {
     const c = this.selected;
     if (!c) {
-      this.body.innerHTML = '<p class="empty">市民をクリックすると、その人の一日を追えます。<br>×0.25 の観察速度と「カメラで追う」を組み合わせると、通勤を最初から最後まで見届けられます。</p>';
+      this.body.innerHTML = '<p class="empty">市民をクリックすると、その人の一日を追えます。<br>×0.25 の観察速度と「カメラで追う」を組み合わせると、通勤を最初から最後まで見届けられます。<br><br>電車に乗る市民を選ぶと、駅までの徒歩・ホームでの待ち・乗車・降車後の徒歩がそのまま観察できます。</p>';
       return;
     }
 
@@ -64,12 +64,35 @@ export class Inspector {
       ['退勤', formatMinute(departForHomeMinute(c.id))],
     ];
 
+    if (c.mode === TravelMode.Transit && c.ride) {
+      const line = world.lines[c.ride.line];
+      const board = world.buildings[c.ride.boardStation];
+      const alight = world.buildings[c.ride.alightStation];
+      rows.push(['移動手段', '電車']);
+      rows.push(['路線', line ? line.name : '—']);
+      rows.push(['乗車駅', board ? address(board.tile) : '—']);
+      rows.push(['降車駅', alight ? address(alight.tile) : '—']);
+
+      if (c.state === CitizenState.Waiting) {
+        const waited = Math.round(ticksToMinutes(sim.clock.tick - c.waitStartTick));
+        rows.push(['待ち時間', `${waited} 分`]);
+      }
+      if (c.state === CitizenState.Riding) {
+        const train = world.trains[c.boardedTrain];
+        if (train) {
+          rows.push(['乗客数', `${train.passengers.length} / ${TRAIN_CAPACITY} 人`]);
+        }
+      }
+    }
+
     if (c.path && (c.state === CitizenState.ToWork || c.state === CitizenState.ToHome)) {
       const target = world.buildings[c.destination];
       const remaining = c.path.length - 1 - c.s;
       const arrival = sim.estimateArrivalMinute(c);
 
-      rows.push(['移動手段', c.mode === TravelMode.Car ? '車' : '徒歩']);
+      if (c.mode !== TravelMode.Transit) {
+        rows.push(['移動手段', c.mode === TravelMode.Car ? '車' : '徒歩']);
+      }
       rows.push(['目的地', target ? `${buildingLabel(target.type)} ${address(target.tile)}` : '—']);
       rows.push(['残り距離', `${Math.round(remaining)} タイル`]);
       rows.push(['到着予定', arrival === null ? '—' : formatMinute(arrival)]);
@@ -111,6 +134,10 @@ function stateLabel(c: Citizen): string {
       return '通勤中（職場へ）';
     case CitizenState.ToHome:
       return '帰宅中';
+    case CitizenState.Waiting:
+      return '駅で電車を待っている';
+    case CitizenState.Riding:
+      return '乗車中';
     case CitizenState.Stranded:
       return '⚠ 経路なし（道路が繋がっていません）';
   }

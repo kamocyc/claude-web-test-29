@@ -8,6 +8,8 @@ export interface InputHandlers {
   onHover(tile: TileIndex): void;
   onSpeedKey(index: number): void;
   onToolKey(key: string): void;
+  /** Whether the active tool paints on drag, checked at drag time. */
+  isDragging(): boolean;
   onToggleZones(): void;
   onToggleTraffic(): void;
 }
@@ -60,7 +62,7 @@ export function attachInput(
     }
     const tile = tileAt(e);
     handlers.onHover(tile);
-    if (painting) {
+    if (painting && handlers.isDragging()) {
       movedWhilePainting = true;
       if (tile >= 0) handlers.onPaint(tile);
     }
@@ -91,12 +93,10 @@ export function attachInput(
   );
 
   window.addEventListener('keydown', (e) => {
-    if (e.key >= '1' && e.key <= '5') handlers.onToolKey(e.key);
+    if (e.key >= '1' && e.key <= '8') handlers.onToolKey(e.key);
     else if (e.key === ' ') {
       e.preventDefault();
       handlers.onSpeedKey(0);
-    } else if (e.key >= '6' && e.key <= '9') {
-      handlers.onSpeedKey(Number(e.key) - 5);
     } else if (e.key === 'z' || e.key === 'Z') handlers.onToggleZones();
     else if (e.key === 't' || e.key === 'T') handlers.onToggleTraffic();
   });

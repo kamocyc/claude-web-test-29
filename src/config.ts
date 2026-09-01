@@ -82,6 +82,56 @@ export const GRIDLOCK_RELEASE_TICKS = 60;
 /** Trips shorter than this are walked instead of driven. */
 export const WALK_DISTANCE_THRESHOLD = 12;
 
+// --- Rail ------------------------------------------------------------------
+// Whether a line is worth building comes out of one inequality. The ride saves
+// D * (1/CAR - 1/TRAIN) ticks over driving, and costs the walk to and from the
+// platforms plus half a headway. With the values below:
+//
+//     saved  = D * (8 - 2.5)          = 5.5 D
+//     cost   = walkTiles / WALK_SPEED + (2D / TRAIN) / TRAINS / 2
+//
+// so a line pays off past roughly 50 tiles with a long walk at each end, and
+// past about 25 with stations sitting right on top of the housing. That is the
+// intended shape: **station siting is the interesting decision**, exactly as it
+// is in the games this borrows from. Both levers here were raised once after
+// measuring the original numbers, which put the break-even beyond the width of
+// the map and left every line empty.
+//
+// 0.4 tiles/tick is 6.4 tiles per real second -- visibly quicker than traffic,
+// and still under the 0.5 ceiling that keeps tile stepping exact.
+
+export const TRAIN_FREE_SPEED = 0.4;
+export const TRAIN_ACCEL = 0.004;
+export const TRAIN_DECEL_COMFORT = 0.006;
+
+/** Trains are long; this is the gap they keep from the train ahead. */
+export const TRAIN_LENGTH = 1.5;
+export const TRAIN_MIN_GAP = 1;
+
+export const TRAIN_CAPACITY = 60;
+
+/** Ticks held at a platform for boarding: about 3 sim minutes. */
+export const TRAIN_DWELL_TICKS = 20;
+
+/** More trains is a shorter headway, which is the other half of the sum. */
+export const TRAINS_PER_LINE = 4;
+
+/**
+ * How far ahead of a train a level crossing closes to road traffic. Long
+ * enough that a car braking comfortably can always stop short of the rails.
+ */
+export const CROSSING_WARN_TILES = 8;
+
+/** How far a citizen will walk to reach a station, in tiles. */
+export const STATION_WALK_RADIUS = 14;
+
+/**
+ * Transit has to beat driving by this factor before a citizen picks it, which
+ * stands in for the friction of changing mode. At 1.0 people would flip to the
+ * train over a one-tick difference.
+ */
+export const TRANSIT_PREFERENCE = 0.95;
+
 // --- Citizens --------------------------------------------------------------
 
 /** Sim minutes past midnight. Jittered per citizen to spread the rush hour. */

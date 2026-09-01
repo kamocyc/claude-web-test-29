@@ -1,5 +1,5 @@
 import { idx } from './core/grid';
-import { CitizenState, Zone, type TileIndex } from './core/types';
+import { BuildingType, CitizenState, Zone, type BuildingId, type TileIndex } from './core/types';
 import { Camera } from './render/camera';
 import { Renderer } from './render/renderer';
 import type { Citizen } from './sim/citizen';
@@ -7,7 +7,8 @@ import { Simulation } from './sim/simulation';
 import { attachInput } from './ui/input';
 import { Hud } from './ui/hud';
 import { Inspector } from './ui/inspector';
-import { applyTool, Tool } from './ui/tools';
+import { applyTool, isDragTool, Tool, TOOL_BY_KEY } from './ui/tools';
+import { createLine } from './world/lineBuilder';
 import { World } from './world/world';
 
 const canvas = document.getElementById('map') as HTMLCanvasElement;
@@ -26,37 +27,92 @@ let showZones = true;
 let showTraffic = true;
 let hoverTile: TileIndex = -1;
 
+/** Stations picked so far with the line tool, in order. */
+let pendingStations: BuildingId[] = [];
+let notice = '';
+let noticeUntil = 0;
+
+function say(message: string): void {
+  notice = message;
+  noticeUntil = performance.now() + 4000;
+}
+
 const hud = new Hud(hudRoot, {
-  onTool: (t) => (tool = t),
+  onTool: (t) => {
+    tool = t;
+    if (t !== Tool.Line) pendingStations = [];
+  },
   onSpeed: (i) => sim.clock.setSpeedIndex(i),
   onToggleZones: () => (showZones = !showZones),
   onToggleTraffic: () => (showTraffic = !showTraffic),
   onPickRandom: pickRandomCitizen,
+  onCommitLine: commitLine,
+  onCancelLine: () => {
+    pendingStations = [];
+  },
 });
 
 seedStartingTown();
-camera.centerOn(88, 62);
+camera.centerOn(92, 64);
 
 attachInput(canvas, camera, {
   onPaint: (tile) => {
-    if (tool !== Tool.Select) applyTool(world, tool, tile);
+    if (tool === Tool.Line) {
+      pickStation(tile);
+      return;
+    }
+    if (tool === Tool.Select) return;
+    if (tool === Tool.Station && !applyTool(world, tool, tile)) {
+      say('駅は線路と道路の両方に接するタイルにしか置けません');
+      return;
+    }
+    applyTool(world, tool, tile);
   },
-  onSelectAt: selectNearestCitizen,
+  onSelectAt: (wx, wy) => {
+    if (tool === Tool.Select) selectNearestCitizen(wx, wy);
+  },
   onHover: (tile) => (hoverTile = tile),
   onSpeedKey: (i) => sim.clock.setSpeedIndex(i),
   onToolKey: (key) => {
-    const map: Record<string, Tool> = {
-      '1': Tool.Select,
-      '2': Tool.Road,
-      '3': Tool.Residential,
-      '4': Tool.Commercial,
-      '5': Tool.Bulldoze,
-    };
-    if (map[key]) tool = map[key];
+    const next = TOOL_BY_KEY[key];
+    if (!next) return;
+    tool = next;
+    if (next !== Tool.Line) pendingStations = [];
   },
   onToggleZones: () => (showZones = !showZones),
   onToggleTraffic: () => (showTraffic = !showTraffic),
+  isDragging: () => isDragTool(tool),
 });
+
+/** Append a clicked station to the line being built, or remove it if repeated. */
+function pickStation(tile: TileIndex): void {
+  const id = world.map.building[tile];
+  const b = id >= 0 ? world.buildings[id] : undefined;
+  if (!b || !b.alive || b.type !== BuildingType.Station) {
+    say('駅をクリックしてください');
+    return;
+  }
+  const at = pendingStations.lastIndexOf(b.id);
+  if (at === pendingStations.length - 1 && at >= 0) {
+    pendingStations.pop();
+    return;
+  }
+  pendingStations.push(b.id);
+}
+
+function commitLine(): void {
+  if (pendingStations.length < 2) {
+    say('路線には2駅以上必要です');
+    return;
+  }
+  const line = createLine(world, pendingStations);
+  if (!line) {
+    say('駅どうしが線路で繋がっていません');
+    return;
+  }
+  say(`${line.name}を開業しました`);
+  pendingStations = [];
+}
 
 function resize(): void {
   const dpr = window.devicePixelRatio || 1;
@@ -91,7 +147,7 @@ function selectNearestCitizen(wx: number, wy: number): void {
 
 function pickRandomCitizen(): void {
   const travelling = world.citizens.filter(
-    (c) => c.state === CitizenState.ToWork || c.state === CitizenState.ToHome,
+    (c) => c.state !== CitizenState.AtHome && c.state !== CitizenState.AtWork,
   );
   const pool = travelling.length > 0 ? travelling : world.citizens;
   if (pool.length === 0) return;
@@ -101,35 +157,67 @@ function pickRandomCitizen(): void {
 }
 
 /**
- * A small starter grid so the first frame is a town rather than an empty
- * field -- the sim is much easier to judge when something is already moving.
+ * The opening scenario: two districts -- housing in the west, workplaces in
+ * the east -- separated by a gap that only two roads and one railway cross.
+ *
+ * The shape is the point. A uniform grid has spare capacity everywhere, so
+ * nothing ever jams and driving always wins; the interesting decisions only
+ * appear once the connection between where people live and where they work is
+ * the scarce thing. Here the corridor congests at rush hour, and that is
+ * exactly when the train starts winning the comparison.
  */
 function seedStartingTown(): void {
-  const x0 = 68;
-  const y0 = 42;
-  const span = 40;
-  // Blocks of four. Tight enough that nearly every zoned tile touches a road,
-  // which is what lets the city actually fill in rather than stall as soon as
-  // the frontage is used up.
   const BLOCK = 5;
+  const top = 44;
+  const height = 40;
+  const west = { x: 60, w: 25 };
+  const east = { x: 99, w: 25 };
+  // Two rows clear of the street at top+20: a station needs a free tile that
+  // touches track on one side and pavement on the other, and that gap is the
+  // only place such a tile exists.
+  const railRow = top + 18;
+  const linkRows = [top + 7, top + 32];
 
-  for (let d = 0; d <= span; d += BLOCK) {
-    for (let k = 0; k <= span; k++) {
-      world.placeRoad(idx(x0 + d, y0 + k));
-      world.placeRoad(idx(x0 + k, y0 + d));
+  const district = (d: { x: number; w: number }, zone: Zone): void => {
+    for (let dy = 0; dy <= height; dy += BLOCK) {
+      for (let k = 0; k <= d.w; k++) world.placeRoad(idx(d.x + k, top + dy));
     }
+    for (let dx = 0; dx <= d.w; dx += BLOCK) {
+      for (let k = 0; k <= height; k++) world.placeRoad(idx(d.x + dx, top + k));
+    }
+    for (let x = d.x; x <= d.x + d.w; x++) {
+      for (let y = top; y <= top + height; y++) {
+        const tile = idx(x, y);
+        if (world.adjacentRoad(tile) >= 0) world.paintZone(tile, zone);
+      }
+    }
+  };
+
+  district(west, Zone.Residential);
+  district(east, Zone.Commercial);
+
+  // Two road links across the gap. Everything drives through these, which is
+  // what makes them back up.
+  for (const y of linkRows) {
+    for (let x = west.x + west.w; x <= east.x; x++) world.placeRoad(idx(x, y));
   }
 
-  const split = x0 + span / 2;
-  for (let x = x0; x <= x0 + span; x++) {
-    for (let y = y0; y <= y0 + span; y++) {
-      const tile = idx(x, y);
-      if (world.adjacentRoad(tile) < 0) continue;
-      // Housing west of the middle avenue, workplaces east of it, so the
-      // morning rush has a direction and the arterials actually load up.
-      world.paintZone(tile, x < split ? Zone.Residential : Zone.Commercial);
-    }
+  // The railway goes down last, so every street it meets becomes a level
+  // crossing rather than a gap in the line.
+  for (let x = west.x + 2; x <= east.x + east.w - 2; x++) {
+    world.placeRail(idx(x, railRow));
   }
+
+  // Two stations per district, on x values off the 5-tile street grid so the
+  // tile is free, sitting right among the blocks they serve. Siting is what
+  // makes a line worth riding: put a station where nobody lives and the walk
+  // to it eats the time the train saves.
+  const stations: BuildingId[] = [];
+  for (const x of [west.x + 8, west.x + 18, east.x + 7, east.x + 17]) {
+    const station = world.placeStation(idx(x, railRow + 1));
+    if (station) stations.push(station.id);
+  }
+  createLine(world, stations);
 }
 
 let lastTime = performance.now();
@@ -150,9 +238,11 @@ function frame(now: number): void {
     showTraffic,
     hoverTile,
     selected: inspector.selected,
+    pendingStations,
   });
 
-  hud.update(sim, tool);
+  if (now > noticeUntil) notice = '';
+  hud.update(sim, tool, pendingStations, notice);
   inspector.update(sim);
 
   requestAnimationFrame(frame);

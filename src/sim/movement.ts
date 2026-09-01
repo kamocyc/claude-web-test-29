@@ -9,6 +9,7 @@ import { CitizenState, TravelMode, type Direction, type TileIndex } from '../cor
 import type { World } from '../world/world';
 import { desiredSpeed, stepSpeed } from './carFollowing';
 import { tileCenterX, tileCenterY, type Citizen } from './citizen';
+import type { Crossings } from './crossings';
 import type { Occupancy } from './occupancy';
 
 /** Index of the last road tile on the route; beyond it the citizen walks. */
@@ -50,7 +51,12 @@ export function registerOccupancy(world: World, occ: Occupancy): void {
 }
 
 /** Phase two: advance one citizen by a tick. Returns true when it arrived. */
-export function advanceCitizen(world: World, c: Citizen, occ: Occupancy): boolean {
+export function advanceCitizen(
+  world: World,
+  c: Citizen,
+  occ: Occupancy,
+  crossings: Crossings,
+): boolean {
   const path = c.path!;
   const seg = segmentOf(c);
   const local = c.s - seg;
@@ -62,7 +68,7 @@ export function advanceCitizen(world: World, c: Citizen, occ: Occupancy): boolea
     const dir = headingOf(c, seg) as Direction;
     const released = c.blockedTicks >= GRIDLOCK_RELEASE_TICKS;
     const gap = gapToLeader(world, c, occ, seg, local, dir, released);
-    const stopDistance = distanceToStop(world, c, occ, seg, dir);
+    const stopDistance = distanceToStop(world, c, occ, crossings, seg, dir);
 
     c.v = stepSpeed(c.v, desiredSpeed(CAR_FREE_SPEED, gap, stopDistance), CAR_FREE_SPEED);
     c.blockedTicks = c.v < 1e-4 ? c.blockedTicks + 1 : 0;
@@ -113,6 +119,7 @@ function distanceToStop(
   world: World,
   c: Citizen,
   occ: Occupancy,
+  crossings: Crossings,
   seg: number,
   dir: Direction,
 ): number {
@@ -122,6 +129,11 @@ function distanceToStop(
 
   const next = seg + 1;
   if (next <= driveEndIndex(path) && world.map.isRoad(path[next])) {
+    // A closed level crossing is a hard stop, and unlike tile capacity it has
+    // no release valve -- waiting longer must never let a car onto the rails.
+    if (crossings.isClosed(path[next])) {
+      return Math.max(0, Math.min(stop, next - c.s));
+    }
     const nextDir = next < path.length - 1 ? directionBetween(path[next], path[next + 1]) : dir;
     const blocked = occ.blockingCount(path[next], nextDir === -1 ? dir : nextDir);
     // Soft capacity: a car stuck long enough is let through anyway, so a ring

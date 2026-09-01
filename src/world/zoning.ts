@@ -85,7 +85,18 @@ function populate(world: World, residence: Building): void {
   }
 }
 
-/** Give every jobless citizen the nearest workplace that still has a slot. */
+/**
+ * Give every jobless citizen a workplace, by a lottery weighted towards the
+ * near ones rather than always the nearest.
+ *
+ * Strict nearest-first looks reasonable and quietly ruins the city: everyone
+ * ends up working a few blocks from home, every commute is short, and nothing
+ * that rewards long trips -- arterial congestion, a rail line -- ever has any
+ * demand to work with. A weighted draw keeps most people local while still
+ * producing the cross-town commuters a real city has.
+ */
+const JOB_DISTANCE_BIAS = 10;
+
 function assignJobs(world: World): void {
   const openings = world.buildings.filter(
     (b) => b.type === BuildingType.Commerce && world.isAlive(b) && hasVacancy(b),
@@ -98,22 +109,34 @@ function assignJobs(world: World): void {
     const home = world.buildings[c.home];
     if (!home || !world.isAlive(home)) continue;
 
-    let best: Building | null = null;
-    let bestDist = Infinity;
-    for (const b of openings) {
-      if (!hasVacancy(b)) continue;
-      const d = manhattan(home.tile, b.tile);
-      if (d < bestDist) {
-        bestDist = d;
-        best = b;
-      }
-    }
-    if (!best) return;
+    const chosen = drawWorkplace(world, home, openings);
+    if (!chosen) return;
 
-    best.occupants.push(c.id);
-    c.work = best.id;
+    chosen.occupants.push(c.id);
+    c.work = chosen.id;
     c.path = null;
   }
+}
+
+function drawWorkplace(world: World, home: Building, openings: Building[]): Building | null {
+  let total = 0;
+  for (const b of openings) {
+    if (hasVacancy(b)) total += weightFor(home, b);
+  }
+  if (total <= 0) return null;
+
+  let roll = world.rng.next() * total;
+  for (const b of openings) {
+    if (!hasVacancy(b)) continue;
+    roll -= weightFor(home, b);
+    if (roll <= 0) return b;
+  }
+  // Floating point can leave a sliver; fall back to any remaining vacancy.
+  return openings.find(hasVacancy) ?? null;
+}
+
+function weightFor(home: Building, work: Building): number {
+  return 1 / (manhattan(home.tile, work.tile) + JOB_DISTANCE_BIAS);
 }
 
 function countVacantJobs(world: World): number {

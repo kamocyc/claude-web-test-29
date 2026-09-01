@@ -8,12 +8,16 @@ export interface HudCallbacks {
   onToggleZones(): void;
   onToggleTraffic(): void;
   onPickRandom(): void;
+  onCommitLine(): void;
+  onCancelLine(): void;
 }
 
 export class Hud {
   private readonly clockEl: HTMLElement;
   private readonly statsEl: HTMLElement;
   private readonly warningEl: HTMLElement;
+  private readonly lineBar: HTMLElement;
+  private readonly lineStatus: HTMLElement;
   private readonly toolButtons = new Map<Tool, HTMLButtonElement>();
   private readonly speedButtons: HTMLButtonElement[] = [];
 
@@ -48,19 +52,42 @@ export class Hud {
     overlays.appendChild(button('渋滞 (T)', () => this.cb.onToggleTraffic()));
     overlays.appendChild(button('市民をランダムに見る', () => this.cb.onPickRandom()));
 
-    root.append(this.clockEl, tools, speeds, overlays, this.statsEl, this.warningEl);
+    // Second row, shown only while the line tool is picking stations.
+    this.lineBar = el('div', 'hud-linebar');
+    this.lineStatus = el('span', 'hud-linestatus');
+    this.lineBar.append(
+      this.lineStatus,
+      button('この順で路線を作る', () => this.cb.onCommitLine()),
+      button('取消', () => this.cb.onCancelLine()),
+    );
+    this.lineBar.hidden = true;
+
+    root.append(this.clockEl, tools, speeds, overlays, this.statsEl, this.warningEl, this.lineBar);
   }
 
-  update(sim: Simulation, tool: Tool): void {
+  update(sim: Simulation, tool: Tool, pending: readonly number[], notice: string): void {
     this.clockEl.textContent = sim.clock.format();
 
     const world = sim.world;
-    this.statsEl.textContent =
-      `人口 ${world.population}　雇用 ${world.employedCount}/${world.jobCount}`;
+    const lines = world.activeLines;
+    const parts = [`人口 ${world.population}`, `雇用 ${world.employedCount}/${world.jobCount}`];
+    if (lines.length > 0) {
+      const riders = lines.reduce((n, l) => n + l.ridership, 0);
+      parts.push(`路線 ${lines.length}`, `のべ乗車 ${riders}`);
+    }
+    this.statsEl.textContent = parts.join('　');
 
-    this.warningEl.textContent = sim.strandedCount > 0
-      ? `⚠ ${sim.strandedCount}人が職場・自宅にたどり着けません（道路が繋がっていません）`
-      : '';
+    this.warningEl.textContent = notice
+      || (sim.strandedCount > 0
+        ? `⚠ ${sim.strandedCount}人が職場・自宅にたどり着けません（道路が繋がっていません）`
+        : '');
+
+    this.lineBar.hidden = tool !== Tool.Line;
+    if (tool === Tool.Line) {
+      this.lineStatus.textContent = pending.length === 0
+        ? '駅を順にクリックしてください（2駅以上）'
+        : `選択中: ${pending.length} 駅`;
+    }
 
     for (const [t, b] of this.toolButtons) b.classList.toggle('active', t === tool);
     this.speedButtons.forEach((b, i) => b.classList.toggle('active', i === sim.clock.speedIndex));

@@ -12,9 +12,13 @@ import { growCity } from '../world/zoning';
 import type { World } from '../world/world';
 import { tileCenterX, tileCenterY, type Citizen } from './citizen';
 import { advanceCitizen, pathIsBroken, registerOccupancy, setPositionFromPath } from './movement';
+import { Crossings } from './crossings';
 import { Occupancy } from './occupancy';
 import { departForHomeMinute, departForWorkMinute, inDepartureWindow } from './schedule';
-import { findRoadPath, PathCache } from './pathfinding';
+import { findPath, PathCache } from './pathfinding';
+import { advanceTrain, carryPassengers } from './trains';
+import { planTransit, transitWins } from './transitPlanner';
+import { TrafficMemory } from './trafficMemory';
 
 /** How long after their departure minute a citizen still counts as leaving. */
 const DEPARTURE_WINDOW_MINUTES = 30;
@@ -24,6 +28,8 @@ const STRANDED_RETRY_TICKS = 200;
 export class Simulation {
   readonly clock = new Clock();
   readonly occupancy = new Occupancy();
+  readonly crossings = new Crossings();
+  readonly traffic = new TrafficMemory();
   readonly pathCache = new PathCache();
 
   strandedCount = 0;
@@ -37,6 +43,9 @@ export class Simulation {
     this.clock.step();
     this.updateSchedules();
     this.servePathRequests();
+    this.moveTrains();
+    this.crossings.update(this.world);
+    this.rescueOrphanedRiders();
     this.moveCitizens();
     this.maybeGrow();
   }
@@ -80,6 +89,9 @@ export class Simulation {
     c.s = 0;
     c.v = 0;
     c.blockedTicks = 0;
+    c.ride = null;
+    c.legAfterRide = null;
+    c.boardedTrain = -1;
     c.tripStartTick = this.clock.tick;
     if (!c.awaitingPath) {
       c.awaitingPath = true;
@@ -125,18 +137,43 @@ export class Simulation {
 
     const key = `${from.accessRoad}:${to.accessRoad}`;
     const roadPath = this.pathCache.get(world.roads, key, () =>
-      findRoadPath(world.map, world.roads, from.accessRoad, to.accessRoad),
+      findPath(world.roads, from.accessRoad, to.accessRoad),
     );
 
-    if (!roadPath) {
+    const doorToDoor = roadPath ? [from.tile, ...roadPath, to.tile] : null;
+    const surfaceMode = manhattan(from.tile, to.tile) > WALK_DISTANCE_THRESHOLD
+      ? TravelMode.Car
+      : TravelMode.Walk;
+
+    // Compare the train against driving at free flow. Both estimates ignore
+    // congestion, which keeps the comparison fair and means a citizen can
+    // still choose the road and then get stuck in the jam the player built --
+    // exactly the situation worth watching.
+    if (world.activeLines.length > 0) {
+      const plan = planTransit(world, from, to);
+      const carTicks = doorToDoor ? this.traffic.driveTicks(doorToDoor) : Infinity;
+
+      if (plan && transitWins(plan.totalTicks, carTicks)) {
+        c.mode = TravelMode.Transit;
+        c.ride = plan.ride;
+        c.legAfterRide = plan.fromStation;
+        c.path = plan.toStation;
+        c.s = 0;
+        c.v = 0;
+        setPositionFromPath(c);
+        return;
+      }
+    }
+
+    if (!doorToDoor) {
       this.strand(c);
       return;
     }
 
-    c.path = [from.tile, ...roadPath, to.tile];
-    c.mode = manhattan(from.tile, to.tile) > WALK_DISTANCE_THRESHOLD
-      ? TravelMode.Car
-      : TravelMode.Walk;
+    c.mode = surfaceMode;
+    c.ride = null;
+    c.legAfterRide = null;
+    c.path = doorToDoor;
     c.s = 0;
     c.v = 0;
     setPositionFromPath(c);
@@ -146,6 +183,9 @@ export class Simulation {
     c.state = CitizenState.Stranded;
     c.path = null;
     c.v = 0;
+    c.ride = null;
+    c.legAfterRide = null;
+    c.boardedTrain = -1;
     c.retryAtTick = this.clock.tick + STRANDED_RETRY_TICKS;
     const home = this.world.buildings[c.home];
     if (home) {
@@ -175,13 +215,51 @@ export class Simulation {
         continue;
       }
 
-      if (advanceCitizen(this.world, c, this.occupancy)) {
-        c.state = c.state === CitizenState.ToWork ? CitizenState.AtWork : CitizenState.AtHome;
-        c.path = null;
-        c.v = 0;
+      if (advanceCitizen(this.world, c, this.occupancy, this.crossings)) {
+        this.finishLeg(c);
       }
     }
     this.strandedCount = stranded;
+    this.traffic.update(this.world, this.occupancy);
+  }
+
+  /**
+   * A leg ended. If a ride is still pending the citizen has just reached a
+   * platform and starts waiting; otherwise they are home or at their desk.
+   */
+  private finishLeg(c: Citizen): void {
+    c.path = null;
+    c.v = 0;
+    if (c.ride && c.boardedTrain < 0) {
+      c.state = CitizenState.Waiting;
+      c.waitStartTick = this.clock.tick;
+      return;
+    }
+    c.state = c.state === CitizenState.ToWork ? CitizenState.AtWork : CitizenState.AtHome;
+  }
+
+  private moveTrains(): void {
+    for (const train of this.world.trains) {
+      advanceTrain(this.world, train, this.clock.tick);
+      carryPassengers(this.world, train);
+    }
+  }
+
+  /**
+   * Someone whose line was demolished while they waited or rode. They are put
+   * back on the pavement and re-plan from where they stand.
+   */
+  private rescueOrphanedRiders(): void {
+    for (const c of this.world.citizens) {
+      if (c.state !== CitizenState.Waiting && c.state !== CitizenState.Riding) continue;
+      const line = c.ride ? this.world.lines[c.ride.line] : undefined;
+      if (line && this.world.lineIsAlive(line)) continue;
+      this.beginTrip(
+        c,
+        c.destination === c.work ? CitizenState.ToWork : CitizenState.ToHome,
+        c.destination,
+      );
+    }
   }
 
   // --- Growth --------------------------------------------------------------

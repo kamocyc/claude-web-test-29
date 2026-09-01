@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { idx } from '../core/grid';
-import { findRoadPath, PathCache } from '../sim/pathfinding';
+import { findPath, PathCache } from '../sim/pathfinding';
 import { World } from '../world/world';
 
 function flatWorld(): World {
@@ -18,7 +18,7 @@ describe('pathfinding', () => {
   it('finds the shortest path down a corridor', () => {
     const w = flatWorld();
     corridor(w);
-    const path = findRoadPath(w.map, w.roads, idx(2, 5), idx(12, 5));
+    const path = findPath(w.roads, idx(2, 5), idx(12, 5));
     expect(path).not.toBeNull();
     expect(path).toHaveLength(11);
     expect(path![0]).toBe(idx(2, 5));
@@ -39,7 +39,7 @@ describe('pathfinding', () => {
     }
     w.bulldoze(idx(5, 5));
 
-    const path = findRoadPath(w.map, w.roads, idx(4, 5), idx(6, 5));
+    const path = findPath(w.roads, idx(4, 5), idx(6, 5));
     expect(path).not.toBeNull();
     // Down, across, and back up rather than the severed two-step hop.
     expect(path!.length).toBeGreaterThan(3);
@@ -50,26 +50,26 @@ describe('pathfinding', () => {
     const w = flatWorld();
     corridor(w);
     w.placeRoad(idx(40, 40));
-    expect(findRoadPath(w.map, w.roads, idx(2, 5), idx(40, 40))).toBeNull();
+    expect(findPath(w.roads, idx(2, 5), idx(40, 40))).toBeNull();
   });
 
   it('returns null for non-road endpoints', () => {
     const w = flatWorld();
     corridor(w);
-    expect(findRoadPath(w.map, w.roads, idx(2, 5), idx(2, 20))).toBeNull();
+    expect(findPath(w.roads, idx(2, 5), idx(2, 20))).toBeNull();
   });
 
   it('returns a single-tile path when start equals goal', () => {
     const w = flatWorld();
     corridor(w);
-    expect(findRoadPath(w.map, w.roads, idx(5, 5), idx(5, 5))).toEqual([idx(5, 5)]);
+    expect(findPath(w.roads, idx(5, 5), idx(5, 5))).toEqual([idx(5, 5)]);
   });
 
   it('caches results and invalidates them when the road graph changes', () => {
     const w = flatWorld();
     corridor(w);
     const cache = new PathCache();
-    const compute = () => findRoadPath(w.map, w.roads, idx(2, 5), idx(12, 5));
+    const compute = () => findPath(w.roads, idx(2, 5), idx(12, 5));
 
     const first = cache.get(w.roads, 'a', compute);
     const second = cache.get(w.roads, 'a', compute);
