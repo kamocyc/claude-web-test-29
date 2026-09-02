@@ -10,6 +10,8 @@ export interface HudCallbacks {
   onPickRandom(): void;
   onCommitLine(): void;
   onCancelLine(): void;
+  onSave(): void;
+  onLoad(): void;
 }
 
 export class Hud {
@@ -18,6 +20,7 @@ export class Hud {
   private readonly warningEl: HTMLElement;
   private readonly lineBar: HTMLElement;
   private readonly lineStatus: HTMLElement;
+  private readonly loadButton: HTMLButtonElement;
   private readonly toolButtons = new Map<Tool, HTMLButtonElement>();
   private readonly speedButtons: HTMLButtonElement[] = [];
 
@@ -52,6 +55,11 @@ export class Hud {
     overlays.appendChild(button('渋滞 (T)', () => this.cb.onToggleTraffic()));
     overlays.appendChild(button('市民をランダムに見る', () => this.cb.onPickRandom()));
 
+    const saves = el('div', 'hud-group');
+    saves.appendChild(button('保存', () => this.cb.onSave()));
+    this.loadButton = button('読み込み', () => this.cb.onLoad());
+    saves.appendChild(this.loadButton);
+
     // Second row, shown only while the line tool is picking stations.
     this.lineBar = el('div', 'hud-linebar');
     this.lineStatus = el('span', 'hud-linestatus');
@@ -62,7 +70,21 @@ export class Hud {
     );
     this.lineBar.hidden = true;
 
-    root.append(this.clockEl, tools, speeds, overlays, this.statsEl, this.warningEl, this.lineBar);
+    root.append(
+      this.clockEl,
+      tools,
+      speeds,
+      overlays,
+      saves,
+      this.statsEl,
+      this.warningEl,
+      this.lineBar,
+    );
+  }
+
+  /** Greyed out until there is something to load, so the button never lies. */
+  setSaveAvailable(available: boolean): void {
+    this.loadButton.disabled = !available;
   }
 
   update(sim: Simulation, tool: Tool, pending: readonly number[], notice: string): void {
@@ -73,7 +95,8 @@ export class Hud {
     const parts = [`人口 ${world.population}`, `雇用 ${world.employedCount}/${world.jobCount}`];
     if (lines.length > 0) {
       const riders = lines.reduce((n, l) => n + l.ridership, 0);
-      parts.push(`路線 ${lines.length}`, `のべ乗車 ${riders}`);
+      const waiting = sim.stats.live.waiting;
+      parts.push(`路線 ${lines.length}`, `のべ乗車 ${riders}`, `駅で待ち ${waiting}`);
     }
     this.statsEl.textContent = parts.join('　');
 

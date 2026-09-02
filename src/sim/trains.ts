@@ -82,7 +82,7 @@ function arriveAtStop(world: World, line: TransitLine, train: Train, tick: numbe
 
   const station = line.stopStation[train.nextStop];
   alight(world, line, train, station);
-  board(world, line, train, station);
+  board(world, line, train, station, tick);
 
   train.nextStop = (train.nextStop + 1) % line.stopAt.length;
 }
@@ -120,7 +120,13 @@ function dropOff(world: World, c: Citizen, station: number): void {
   }
 }
 
-function board(world: World, line: TransitLine, train: Train, station: number): void {
+function board(
+  world: World,
+  line: TransitLine,
+  train: Train,
+  station: number,
+  tick: number,
+): void {
   for (const c of world.citizens) {
     if (!trainHasRoom(train)) return;
     if (c.state !== CitizenState.Waiting || !c.ride) continue;
@@ -132,6 +138,7 @@ function board(world: World, line: TransitLine, train: Train, station: number): 
     train.passengers.push(c.id);
     c.boardedTrain = train.id;
     c.state = CitizenState.Riding;
+    c.lastWaitTicks = Math.max(0, tick - c.waitStartTick);
     c.waitStartTick = 0;
   }
 }

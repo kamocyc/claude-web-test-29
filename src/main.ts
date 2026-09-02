@@ -7,20 +7,29 @@ import { Simulation } from './sim/simulation';
 import { attachInput } from './ui/input';
 import { Hud } from './ui/hud';
 import { Inspector } from './ui/inspector';
+import { StatsPanel } from './ui/stats';
 import { applyTool, isDragTool, Tool, TOOL_BY_KEY } from './ui/tools';
-import { createLine } from './world/lineBuilder';
+import { createLine, createLineThrough } from './world/lineBuilder';
+import { hasSavedCity, loadFromStorage, saveToStorage } from './world/persistence';
 import { World } from './world/world';
 
 const canvas = document.getElementById('map') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
 const hudRoot = document.getElementById('hud')!;
 const inspectorRoot = document.getElementById('inspector')!;
+const statsRoot = document.getElementById('stats')!;
 
-const world = new World(20260831);
-const sim = new Simulation(world);
+/**
+ * The simulation is a `let` rather than a `const` because loading a save
+ * replaces it wholesale. Rebuilding is what makes a load safe: every id in the
+ * sim is an array index, so patching a live city in place would leave the
+ * panels pointing at citizens that no longer exist.
+ */
+let sim = new Simulation(new World(20260831));
 const camera = new Camera();
 const renderer = new Renderer(ctx, camera);
 const inspector = new Inspector(inspectorRoot);
+const statsPanel = new StatsPanel(statsRoot);
 
 let tool: Tool = Tool.Road;
 let showZones = true;
@@ -50,7 +59,10 @@ const hud = new Hud(hudRoot, {
   onCancelLine: () => {
     pendingStations = [];
   },
+  onSave: saveCity,
+  onLoad: loadCity,
 });
+hud.setSaveAvailable(hasSavedCity());
 
 seedStartingTown();
 camera.centerOn(92, 64);
@@ -62,14 +74,14 @@ attachInput(canvas, camera, {
       return;
     }
     if (tool === Tool.Select) return;
-    if (tool === Tool.Station && !applyTool(world, tool, tile)) {
-      say('駅は線路と道路の両方に接するタイルにしか置けません');
+    if (tool === Tool.Station && !applyTool(sim.world, tool, tile)) {
+      say('駅は道路に接する空きタイルにしか置けません');
       return;
     }
-    applyTool(world, tool, tile);
+    applyTool(sim.world, tool, tile);
   },
   onSelectAt: (wx, wy) => {
-    if (tool === Tool.Select) selectNearestCitizen(wx, wy);
+    if (tool === Tool.Select) selectAt(wx, wy);
   },
   onHover: (tile) => (hoverTile = tile),
   onSpeedKey: (i) => sim.clock.setSpeedIndex(i),
@@ -86,8 +98,8 @@ attachInput(canvas, camera, {
 
 /** Append a clicked station to the line being built, or remove it if repeated. */
 function pickStation(tile: TileIndex): void {
-  const id = world.map.building[tile];
-  const b = id >= 0 ? world.buildings[id] : undefined;
+  const id = sim.world.map.building[tile];
+  const b = id >= 0 ? sim.world.buildings[id] : undefined;
   if (!b || !b.alive || b.type !== BuildingType.Station) {
     say('駅をクリックしてください');
     return;
@@ -100,18 +112,57 @@ function pickStation(tile: TileIndex): void {
   pendingStations.push(b.id);
 }
 
+/**
+ * Open a service through the stations the player picked, in that order,
+ * laying whatever track is missing between them.
+ */
 function commitLine(): void {
   if (pendingStations.length < 2) {
     say('路線には2駅以上必要です');
     return;
   }
-  const line = createLine(world, pendingStations);
+  const { line, builtTrack } = createLineThrough(sim.world, pendingStations);
   if (!line) {
-    say('駅どうしが線路で繋がっていません');
+    say('駅どうしを結ぶ線路を敷けません（水面や建物が邪魔をしています）');
     return;
   }
-  say(`${line.name}を開業しました`);
+  say(
+    builtTrack
+      ? `${line.name}を開業しました（不足していた線路を敷設しました）`
+      : `${line.name}を開業しました`,
+  );
   pendingStations = [];
+}
+
+// --- Save / load -----------------------------------------------------------
+
+function saveCity(): void {
+  try {
+    saveToStorage(sim);
+    hud.setSaveAvailable(true);
+    say('この街を保存しました');
+  } catch (e) {
+    say(e instanceof Error ? e.message : '保存に失敗しました');
+  }
+}
+
+function loadCity(): void {
+  try {
+    const loaded = loadFromStorage();
+    if (!loaded) {
+      say('保存された街がありません');
+      return;
+    }
+    // The clock speed is a viewing preference, not part of the city: keep
+    // whatever the player was watching at.
+    loaded.clock.setSpeedIndex(sim.clock.speedIndex);
+    sim = loaded;
+    pendingStations = [];
+    inspector.clear();
+    say('保存した街を読み込みました');
+  } catch (e) {
+    say(e instanceof Error ? e.message : '読み込みに失敗しました');
+  }
 }
 
 function resize(): void {
@@ -126,13 +177,25 @@ function resize(): void {
 window.addEventListener('resize', resize);
 resize();
 
+/** A click picks the station under the cursor, or else the nearest traveller. */
+function selectAt(wx: number, wy: number): void {
+  const tile = sim.world.map.at(Math.floor(wx), Math.floor(wy));
+  const bid = tile >= 0 ? sim.world.map.building[tile] : -1;
+  const building = bid >= 0 ? sim.world.buildings[bid] : undefined;
+  if (building && building.alive && building.type === BuildingType.Station) {
+    inspector.selectStation(building);
+    return;
+  }
+  selectNearestCitizen(wx, wy);
+}
+
 /** Clicking picks the closest travelling citizen within a forgiving radius. */
 function selectNearestCitizen(wx: number, wy: number): void {
   const radius = Math.max(1.5, 24 / camera.zoom);
   let best: Citizen | null = null;
   let bestDist = radius * radius;
 
-  for (const c of world.citizens) {
+  for (const c of sim.world.citizens) {
     if (c.state === CitizenState.AtHome || c.state === CitizenState.AtWork) continue;
     const dx = c.x - wx;
     const dy = c.y - wy;
@@ -146,10 +209,10 @@ function selectNearestCitizen(wx: number, wy: number): void {
 }
 
 function pickRandomCitizen(): void {
-  const travelling = world.citizens.filter(
+  const travelling = sim.world.citizens.filter(
     (c) => c.state !== CitizenState.AtHome && c.state !== CitizenState.AtWork,
   );
-  const pool = travelling.length > 0 ? travelling : world.citizens;
+  const pool = travelling.length > 0 ? travelling : sim.world.citizens;
   if (pool.length === 0) return;
   const c = pool[Math.floor(Math.random() * pool.length)];
   inspector.select(c);
@@ -167,6 +230,7 @@ function pickRandomCitizen(): void {
  * exactly when the train starts winning the comparison.
  */
 function seedStartingTown(): void {
+  const world = sim.world;
   const BLOCK = 5;
   const top = 44;
   const height = 40;
@@ -244,6 +308,7 @@ function frame(now: number): void {
   if (now > noticeUntil) notice = '';
   hud.update(sim, tool, pendingStations, notice);
   inspector.update(sim);
+  statsPanel.update(sim, now);
 
   requestAnimationFrame(frame);
 }

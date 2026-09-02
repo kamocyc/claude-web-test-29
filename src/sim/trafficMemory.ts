@@ -67,6 +67,25 @@ export class TrafficMemory {
     if (before >= 1 && this.ratio[tile] < 1) this.tracked.push(tile);
   }
 
+  /** The remembered speeds, for saving. Copied: callers must not alias it. */
+  snapshot(): Float32Array {
+    return this.ratio.slice();
+  }
+
+  /**
+   * Restore remembered speeds from a save. The tracked list is rebuilt from
+   * the data rather than stored, since it is derivable and storing it would
+   * give the two a chance to disagree.
+   */
+  restore(ratios: Float32Array): void {
+    this.tracked = [];
+    for (let i = 0; i < this.ratio.length; i++) {
+      const value = i < ratios.length ? ratios[i] : 1;
+      this.ratio[i] = value;
+      if (value < 1) this.tracked.push(i);
+    }
+  }
+
   speedRatio(tile: TileIndex): number {
     return this.ratio[tile];
   }

@@ -41,6 +41,18 @@ export interface Citizen {
 
   /** Ticks spent unable to move; releases the soft tile capacity on gridlock. */
   blockedTicks: number;
+  /**
+   * The junction this car has decided to stop at, or -1.
+   *
+   * The decision has to be latched rather than recomputed. A car easing up to
+   * a stop line approaches it asymptotically, and "could I still brake from
+   * here?" eventually answers no for any car that is close enough and moving
+   * at all -- which would turn a car that has been waiting politely into one
+   * that rolls through the red. Deciding once, when the light changes, and
+   * holding that decision until it goes green is both stabler and closer to
+   * what a driver actually does.
+   */
+  signalHold: TileIndex;
   /** Tick the current trip began, for the inspector's travel-time readout. */
   tripStartTick: number;
   /** Set when a path request is queued, so it is not requested twice. */
@@ -62,6 +74,8 @@ export interface Citizen {
   boardedTrain: TrainId;
   /** Tick the citizen reached the platform, for the "waited N min" readout. */
   waitStartTick: number;
+  /** How long the last boarding actually took, kept for the trip statistics. */
+  lastWaitTicks: number;
 }
 
 const FAMILY = [
@@ -97,6 +111,7 @@ export function createCitizen(
     prevX: tileCenterX(homeTile),
     prevY: tileCenterY(homeTile),
     blockedTicks: 0,
+    signalHold: -1,
     tripStartTick: 0,
     awaitingPath: false,
     retryAtTick: 0,
@@ -104,6 +119,7 @@ export function createCitizen(
     legAfterRide: null,
     boardedTrain: -1,
     waitStartTick: 0,
+    lastWaitTicks: 0,
   };
 }
 

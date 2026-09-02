@@ -91,18 +91,32 @@ export class World {
   }
 
   /**
-   * A station needs track to serve it and a pavement for passengers to reach
-   * it, so it can only go on a tile that touches both.
+   * A station needs a pavement for passengers to reach it, so it goes on a
+   * tile touching a road.
+   *
+   * Track is *not* required up front. Demanding it made the player draw a
+   * railway before they could say where the stations went, which is backwards:
+   * where the stations go is the interesting decision, and the alignment
+   * between them is a consequence of it. A station placed beside existing
+   * track adopts it as its platform; one placed on open ground gets its
+   * platform when a line is run through it.
    */
   placeStation(tile: TileIndex): Building | null {
     if (tile < 0 || !this.map.isBuildable(tile)) return null;
-    const road = this.adjacentRoad(tile);
-    const platform = this.adjacentRail(tile);
-    if (road < 0 || platform < 0) return null;
+    if (this.adjacentRoad(tile) < 0) return null;
 
     const b = this.addBuilding(tile, BuildingType.Station);
-    if (b) b.platform = platform;
+    if (b) b.platform = this.adjacentRail(tile);
     return b;
+  }
+
+  /** Take a track tile back up. The inverse of `placeRail`. */
+  removeRail(tile: TileIndex): boolean {
+    if (tile < 0 || this.map.rail[tile] !== 1) return false;
+    this.map.rail[tile] = 0;
+    this.rails.update(tile);
+    this.invalidateLinesUsing(tile);
+    return true;
   }
 
   bulldoze(tile: TileIndex): boolean {

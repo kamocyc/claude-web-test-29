@@ -157,3 +157,34 @@ export const BUILDINGS_PER_GROWTH_STEP = 3;
  *  cap the 8am departure spike would stall a frame. */
 export const PATH_REQUESTS_PER_TICK = 64;
 export const PATH_CACHE_SIZE = 4000;
+
+// --- Traffic signals -------------------------------------------------------
+// Only four-way (and T) junctions where two axes actually conflict get a
+// signal; a corner has nothing to arbitrate. The cycle is deliberately short
+// in ticks -- 48 ticks is 3 real seconds at x1, long enough to watch a queue
+// build and discharge, short enough that a commute is not dominated by it.
+
+export const SIGNAL_GREEN_TICKS = 48;
+
+/** Everything red between phases, so the box clears before the cross flow. */
+export const SIGNAL_ALL_RED_TICKS = 6;
+
+export const SIGNAL_CYCLE_TICKS = 2 * (SIGNAL_GREEN_TICKS + SIGNAL_ALL_RED_TICKS);
+
+// --- Rendering -------------------------------------------------------------
+
+/**
+ * How far off the centre of the road a vehicle is drawn, in tiles. Traffic
+ * keeps left, so the two directions occupy visibly separate lanes -- which is
+ * also exactly what the occupancy model already assumes (opposing traffic is
+ * never counted as blocking).
+ */
+export const LANE_OFFSET = 0.2;
+
+/** Pedestrians keep left too, but on the pavement rather than the lane. */
+export const WALK_LANE_OFFSET = 0.34;
+
+// --- Statistics ------------------------------------------------------------
+
+/** Completed trips kept for the rolling averages shown in the stats panel. */
+export const TRIP_HISTORY_SIZE = 300;

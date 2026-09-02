@@ -35,11 +35,11 @@ function railCorridor(w: World, xs: number[]): BuildingId[] {
 }
 
 describe('stations', () => {
-  it('needs both track and a road to sit on', () => {
+  it('needs a road to sit on, and adopts the track beside it', () => {
     const w = flatWorld();
     for (let x = 2; x <= 10; x++) w.placeRail(idx(x, 20));
 
-    // Track but no road: not a station.
+    // Track but no road: passengers could not reach it, so not a station.
     expect(w.placeStation(idx(5, 19))).toBeNull();
 
     w.placeRoad(idx(5, 18));
@@ -50,10 +50,14 @@ describe('stations', () => {
     expect(b!.accessRoad).toBe(idx(5, 18));
   });
 
-  it('refuses a tile with only a road', () => {
+  it('accepts a tile with only a road, and waits for its platform', () => {
     const w = flatWorld();
     for (let x = 2; x <= 10; x++) w.placeRoad(idx(x, 18));
-    expect(w.placeStation(idx(5, 19))).toBeNull();
+
+    // Siting comes first; the line tool lays the track that serves it.
+    const b = w.placeStation(idx(5, 19));
+    expect(b).not.toBeNull();
+    expect(b!.platform).toBe(-1);
   });
 
   it('does not count as a home or a workplace', () => {

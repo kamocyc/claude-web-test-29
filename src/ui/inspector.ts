@@ -5,6 +5,7 @@ import { BuildingType, CitizenState, TravelMode } from '../core/types';
 import type { Citizen } from '../sim/citizen';
 import { departForHomeMinute, departForWorkMinute } from '../sim/schedule';
 import type { Simulation } from '../sim/simulation';
+import type { Building } from '../world/buildings';
 
 /**
  * The panel the whole game exists for: one citizen, what they are doing, and
@@ -13,16 +14,19 @@ import type { Simulation } from '../sim/simulation';
  * drift apart.
  */
 export class Inspector {
+  private readonly title: HTMLElement;
   private readonly body: HTMLElement;
   private readonly followBox: HTMLInputElement;
 
   selected: Citizen | null = null;
+  /** A station the player clicked instead of a citizen. */
+  selectedStation: Building | null = null;
 
   constructor(root: HTMLElement) {
     root.innerHTML = '';
 
-    const title = document.createElement('h2');
-    title.textContent = '市民';
+    this.title = document.createElement('h2');
+    this.title.textContent = '市民';
 
     const follow = document.createElement('label');
     follow.className = 'follow';
@@ -33,7 +37,7 @@ export class Inspector {
     this.body = document.createElement('div');
     this.body.className = 'inspector-body';
 
-    root.append(title, follow, this.body);
+    root.append(this.title, follow, this.body);
   }
 
   get following(): boolean {
@@ -42,12 +46,31 @@ export class Inspector {
 
   select(c: Citizen | null): void {
     this.selected = c;
+    if (c) this.selectedStation = null;
+  }
+
+  selectStation(b: Building | null): void {
+    this.selectedStation = b;
+    if (b) this.selected = null;
+  }
+
+  /** Called after a load, when every id in the panel belongs to an old city. */
+  clear(): void {
+    this.selected = null;
+    this.selectedStation = null;
   }
 
   update(sim: Simulation): void {
+    if (this.selectedStation) {
+      this.title.textContent = '駅';
+      this.updateStation(sim, this.selectedStation);
+      return;
+    }
+    this.title.textContent = '市民';
+
     const c = this.selected;
     if (!c) {
-      this.body.innerHTML = '<p class="empty">市民をクリックすると、その人の一日を追えます。<br>×0.25 の観察速度と「カメラで追う」を組み合わせると、通勤を最初から最後まで見届けられます。<br><br>電車に乗る市民を選ぶと、駅までの徒歩・ホームでの待ち・乗車・降車後の徒歩がそのまま観察できます。</p>';
+      this.body.innerHTML = '<p class="empty">市民をクリックすると、その人の一日を追えます。<br>×0.25 の観察速度と「カメラで追う」を組み合わせると、通勤を最初から最後まで見届けられます。<br><br>電車に乗る市民を選ぶと、駅までの徒歩・ホームでの待ち・乗車・降車後の徒歩がそのまま観察できます。<br><br>駅をクリックすると、待っている人数と発着する路線が見られます。</p>';
       return;
     }
 
@@ -76,6 +99,7 @@ export class Inspector {
       if (c.state === CitizenState.Waiting) {
         const waited = Math.round(ticksToMinutes(sim.clock.tick - c.waitStartTick));
         rows.push(['待ち時間', `${waited} 分`]);
+        rows.push(['ホームの人数', `${sim.stats.waitingAt(c.ride.boardStation)} 人`]);
       }
       if (c.state === CitizenState.Riding) {
         const train = world.trains[c.boardedTrain];
@@ -108,20 +132,61 @@ export class Inspector {
     }
 
     this.body.innerHTML = '';
-    const dl = document.createElement('dl');
-    for (const [k, v] of rows) {
-      const dt = document.createElement('dt');
-      dt.textContent = k;
-      const dd = document.createElement('dd');
-      dd.textContent = v;
-      dl.append(dt, dd);
-    }
-    this.body.appendChild(dl);
+    this.body.appendChild(definitionList(rows));
 
     if (c.mode === TravelMode.Car && c.path) {
       this.body.appendChild(speedBar(c.v / CAR_FREE_SPEED));
     }
   }
+
+  /**
+   * A station: how many people are stood on the platform right now, and what
+   * is coming to collect them. The waiting figure is the same counter the map
+   * badge draws, so the panel and the badge can never disagree.
+   */
+  private updateStation(sim: Simulation, station: Building): void {
+    const world = sim.world;
+    if (!world.isAlive(station)) {
+      this.body.innerHTML = '<p class="empty">この駅は撤去されました。</p>';
+      return;
+    }
+
+    const lines = world.activeLines.filter((l) => l.stations.includes(station.id));
+    const rows: Array<[string, string]> = [
+      ['場所', address(station.tile)],
+      ['待ち人数', `${sim.stats.waitingAt(station.id)} 人`],
+      ['乗り入れ路線', lines.length === 0 ? 'なし' : lines.map((l) => l.name).join('、')],
+    ];
+
+    for (const line of lines) {
+      let aboard = 0;
+      for (const id of line.trains) aboard += world.trains[id]?.passengers.length ?? 0;
+      rows.push([`${line.name} の列車`, `${line.trains.length} 本 ／ 乗車 ${aboard} 人`]);
+      rows.push([`${line.name} のべ乗車`, `${line.ridership} 人`]);
+    }
+
+    this.body.innerHTML = '';
+    this.body.appendChild(definitionList(rows));
+
+    if (lines.length === 0) {
+      const hint = document.createElement('p');
+      hint.className = 'empty';
+      hint.textContent = '「路線」ツールでこの駅を含む駅を2つ以上選ぶと、路線を開設できます。';
+      this.body.appendChild(hint);
+    }
+  }
+}
+
+function definitionList(rows: Array<[string, string]>): HTMLElement {
+  const dl = document.createElement('dl');
+  for (const [k, v] of rows) {
+    const dt = document.createElement('dt');
+    dt.textContent = k;
+    const dd = document.createElement('dd');
+    dd.textContent = v;
+    dl.append(dt, dd);
+  }
+  return dl;
 }
 
 function stateLabel(c: Citizen): string {

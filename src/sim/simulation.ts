@@ -14,6 +14,8 @@ import { tileCenterX, tileCenterY, type Citizen } from './citizen';
 import { advanceCitizen, pathIsBroken, registerOccupancy, setPositionFromPath } from './movement';
 import { Crossings } from './crossings';
 import { Occupancy } from './occupancy';
+import { Signals } from './signals';
+import { Statistics } from './statistics';
 import { departForHomeMinute, departForWorkMinute, inDepartureWindow } from './schedule';
 import { findPath, PathCache } from './pathfinding';
 import { advanceTrain, carryPassengers } from './trains';
@@ -29,13 +31,22 @@ export class Simulation {
   readonly clock = new Clock();
   readonly occupancy = new Occupancy();
   readonly crossings = new Crossings();
+  readonly signals = new Signals();
+  readonly stats = new Statistics();
   readonly traffic = new TrafficMemory();
   readonly pathCache = new PathCache();
 
   strandedCount = 0;
 
   private pathQueue: Citizen[] = [];
-  private lastGrowthMinute = -1;
+
+  /**
+   * The growth bucket already evaluated. Public because a save has to carry
+   * it: starting a loaded city back at -1 would run an extra growth step the
+   * moment it resumed, so every save/load cycle would quietly inflate the
+   * town.
+   */
+  lastGrowthBucket = -1;
 
   constructor(readonly world: World) {}
 
@@ -45,9 +56,12 @@ export class Simulation {
     this.servePathRequests();
     this.moveTrains();
     this.crossings.update(this.world);
+    this.signals.refresh(this.world);
     this.rescueOrphanedRiders();
     this.moveCitizens();
     this.maybeGrow();
+    // Last, so the census always includes anyone who moved in this tick.
+    this.stats.sample(this.world);
   }
 
   // --- Schedule ------------------------------------------------------------
@@ -89,14 +103,20 @@ export class Simulation {
     c.s = 0;
     c.v = 0;
     c.blockedTicks = 0;
+    c.signalHold = -1;
     c.ride = null;
     c.legAfterRide = null;
     c.boardedTrain = -1;
+    c.lastWaitTicks = 0;
     c.tripStartTick = this.clock.tick;
-    if (!c.awaitingPath) {
-      c.awaitingPath = true;
-      this.pathQueue.push(c);
-    }
+    this.requestRoute(c);
+  }
+
+  /** Queue a routing request, unless one is already outstanding. */
+  requestRoute(c: Citizen): void {
+    if (c.awaitingPath) return;
+    c.awaitingPath = true;
+    this.pathQueue.push(c);
   }
 
   // --- Routing -------------------------------------------------------------
@@ -208,14 +228,29 @@ export class Simulation {
         continue;
       }
       if (c.state !== CitizenState.ToWork && c.state !== CitizenState.ToHome) continue;
-      if (!c.path) continue;
+      if (!c.path) {
+        // Travelling with no route: the request is still in the queue, or the
+        // city was just loaded from a save and the queue went with the old
+        // one. Asking again is idempotent and costs a tick at most.
+        this.requestRoute(c);
+        continue;
+      }
 
       if (pathIsBroken(this.world, c)) {
         this.beginTrip(c, c.state, c.destination);
         continue;
       }
 
-      if (advanceCitizen(this.world, c, this.occupancy, this.crossings)) {
+      if (
+        advanceCitizen(
+          this.world,
+          c,
+          this.occupancy,
+          this.crossings,
+          this.signals,
+          this.clock.tick,
+        )
+      ) {
         this.finishLeg(c);
       }
     }
@@ -236,6 +271,7 @@ export class Simulation {
       return;
     }
     c.state = c.state === CitizenState.ToWork ? CitizenState.AtWork : CitizenState.AtHome;
+    this.stats.recordTrip(c, this.clock.tick);
   }
 
   private moveTrains(): void {
@@ -266,8 +302,8 @@ export class Simulation {
 
   private maybeGrow(): void {
     const bucket = Math.floor(this.clock.minuteOfDay / GROWTH_INTERVAL_MINUTES);
-    if (bucket === this.lastGrowthMinute) return;
-    this.lastGrowthMinute = bucket;
+    if (bucket === this.lastGrowthBucket) return;
+    this.lastGrowthBucket = bucket;
     growCity(this.world);
   }
 

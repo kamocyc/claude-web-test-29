@@ -1,4 +1,11 @@
-import { CAR_FREE_SPEED, TRAIN_CAPACITY, TRAIN_LENGTH } from '../config';
+import {
+  CAR_FREE_SPEED,
+  LANE_OFFSET,
+  MAP_SIZE,
+  TRAIN_CAPACITY,
+  TRAIN_LENGTH,
+  WALK_LANE_OFFSET,
+} from '../config';
 import { idx } from '../core/grid';
 import {
   BuildingType,
@@ -8,6 +15,7 @@ import {
   Zone,
   type TileIndex,
 } from '../core/types';
+import { SignalAxis } from '../sim/signals';
 import type { Citizen } from '../sim/citizen';
 import { tileCenterX, tileCenterY } from '../sim/citizen';
 import type { Simulation } from '../sim/simulation';
@@ -25,6 +33,9 @@ export interface RenderOptions {
 }
 
 export class Renderer {
+  /** Stations seen while drawing tiles, so their badges can go on top. */
+  private readonly stationBadges: Array<{ id: number; x: number; y: number }> = [];
+
   constructor(
     private readonly ctx: CanvasRenderingContext2D,
     private readonly camera: Camera,
@@ -39,10 +50,13 @@ export class Renderer {
     ctx.fillRect(0, 0, w, h);
 
     const view = camera.visibleTiles();
+    this.stationBadges.length = 0;
     this.drawTiles(sim, view, opts);
     this.drawLines(sim);
+    this.drawSignals(sim, view);
     this.drawAgents(sim, alpha, opts);
     this.drawTrains(sim, alpha);
+    this.drawStationBadges(sim);
     this.drawPendingStations(sim, opts);
     if (opts.selected) this.drawSelection(opts.selected, alpha);
     if (opts.hoverTile >= 0) this.drawHover(opts.hoverTile);
@@ -83,6 +97,9 @@ export class Renderer {
           if (b && sim.world.isAlive(b)) {
             const fill = b.capacity > 0 ? b.occupants.length / b.capacity : 1;
             this.drawBuilding(p.x, p.y, z, b.type, fill);
+            if (b.type === BuildingType.Station) {
+              this.stationBadges.push({ id: b.id, x: p.x + z / 2, y: p.y });
+            }
           }
         } else if (opts.showZones && map.zone[i] !== Zone.None) {
           ctx.fillStyle = map.zone[i] === Zone.Residential
@@ -134,13 +151,23 @@ export class Renderer {
     this.ctx.globalAlpha = 1;
   }
 
+  /**
+   * Agents are drawn in their lane and facing the way they are going.
+   *
+   * Both come from the same place: the route segment the citizen is on gives
+   * a heading, the heading gives a rotation for the body, and the same vector
+   * turned ninety degrees gives the offset that puts traffic on the left-hand
+   * side of the road. Opposing flows already live in separate queues in the
+   * occupancy model -- this is what makes that visible, so a jam can be read
+   * as one direction backing up rather than an undifferentiated blob.
+   */
   private drawAgents(sim: Simulation, alpha: number, opts: RenderOptions): void {
     const { ctx, camera } = this;
     const z = camera.zoom;
     // Below this zoom individual dots are sub-pixel noise, so thin them out.
     const stride = z < 6 ? 3 : 1;
-    const carSize = Math.max(2, z * 0.3);
     const walkSize = Math.max(1.5, z * 0.18);
+    const detailed = z >= 7;
 
     for (let i = 0; i < sim.world.citizens.length; i += stride) {
       const c = sim.world.citizens[i];
@@ -149,26 +176,60 @@ export class Renderer {
       // would just pile up on top of it.
       if (c.state === CitizenState.Riding) continue;
 
-      const x = c.prevX + (c.x - c.prevX) * alpha;
-      const y = c.prevY + (c.y - c.prevY) * alpha;
-      const p = camera.worldToScreen(x, y);
+      const pose = agentPose(c, alpha);
+      const p = camera.worldToScreen(pose.x, pose.y);
       if (p.x < -8 || p.y < -8 || p.x > camera.viewportWidth + 8 || p.y > camera.viewportHeight + 8) {
         continue;
       }
 
       if (c.state === CitizenState.Stranded) {
         ctx.fillStyle = COLORS.stranded;
-      } else if (c.mode === TravelMode.Car) {
-        ctx.fillStyle = speedColor(c.v / CAR_FREE_SPEED);
-      } else {
-        ctx.fillStyle = COLORS.pedestrian;
+        ctx.fillRect(p.x - walkSize / 2, p.y - walkSize / 2, walkSize, walkSize);
+        continue;
       }
 
-      const s = c.mode === TravelMode.Car ? carSize : walkSize;
-      ctx.fillRect(p.x - s / 2, p.y - s / 2, s, s);
+      if (c.mode === TravelMode.Car) {
+        const color = speedColor(c.v / CAR_FREE_SPEED);
+        if (detailed) this.drawCar(p.x, p.y, pose.angle, z, color);
+        else {
+          const s = Math.max(2, z * 0.3);
+          ctx.fillStyle = color;
+          ctx.fillRect(p.x - s / 2, p.y - s / 2, s, s);
+        }
+      } else {
+        ctx.fillStyle = COLORS.pedestrian;
+        ctx.fillRect(p.x - walkSize / 2, p.y - walkSize / 2, walkSize, walkSize);
+      }
     }
 
     if (opts.selected) this.drawPath(sim, opts.selected);
+  }
+
+  /**
+   * A car body with a distinguishable front: a light windscreen band at the
+   * nose and a dark tail. At any zoom where the body is more than a few
+   * pixels this reads as a direction of travel without needing an arrow.
+   */
+  private drawCar(px: number, py: number, angle: number, z: number, color: string): void {
+    const ctx = this.ctx;
+    const length = Math.max(4, z * 0.46);
+    const width = Math.max(2.5, z * 0.28);
+
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.rotate(angle);
+
+    ctx.fillStyle = color;
+    ctx.fillRect(-length / 2, -width / 2, length, width);
+
+    // Nose: the bright end always points the way the car is heading.
+    ctx.fillStyle = COLORS.carNose;
+    ctx.fillRect(length / 2 - length * 0.22, -width / 2, length * 0.22, width);
+    // Tail.
+    ctx.fillStyle = COLORS.carTail;
+    ctx.fillRect(-length / 2, -width / 2, length * 0.16, width);
+
+    ctx.restore();
   }
 
   private drawPath(sim: Simulation, c: Citizen): void {
@@ -207,9 +268,8 @@ export class Renderer {
 
   private drawSelection(c: Citizen, alpha: number): void {
     const { ctx, camera } = this;
-    const x = c.prevX + (c.x - c.prevX) * alpha;
-    const y = c.prevY + (c.y - c.prevY) * alpha;
-    const p = camera.worldToScreen(x, y);
+    const pose = agentPose(c, alpha);
+    const p = camera.worldToScreen(pose.x, pose.y);
     ctx.strokeStyle = COLORS.selection;
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -289,7 +349,78 @@ export class Renderer {
         ctx.fillRect(-w / 2, -h / 2, w * load, h * 0.3);
       }
       ctx.restore();
+
+      // The load bar says how full; the number says how many. At this zoom
+      // the player is watching one line rather than the whole city, and
+      // "38/60" is the thing they are actually asking about.
+      if (z >= 9) {
+        this.drawBadge(p.x, p.y - Math.max(8, z * 0.6), `${train.passengers.length}人`, z);
+      }
     }
+  }
+
+  /**
+   * Signal heads at each junction: two dots on the north/south approaches and
+   * two on the east/west ones, so which movement currently holds the green is
+   * readable at a glance -- and matches exactly what the cars are obeying,
+   * since both read the same phase function.
+   */
+  private drawSignals(
+    sim: Simulation,
+    view: { x0: number; y0: number; x1: number; y1: number },
+  ): void {
+    const { ctx, camera } = this;
+    const z = camera.zoom;
+    if (z < 6) return;
+
+    const tick = sim.clock.tick;
+    const r = Math.max(1.2, z * 0.11);
+
+    for (const tile of sim.signals.signalTiles) {
+      const x = tile % MAP_SIZE;
+      const y = (tile / MAP_SIZE) | 0;
+      if (x < view.x0 || x > view.x1 || y < view.y0 || y > view.y1) continue;
+
+      const green = sim.signals.greenAxis(tile, tick);
+      const p = camera.worldToScreen(x, y);
+      const ns = green === SignalAxis.NorthSouth ? COLORS.signalGreen : COLORS.signalRed;
+      const ew = green === SignalAxis.EastWest ? COLORS.signalGreen : COLORS.signalRed;
+
+      dot(ctx, p.x + z * 0.5, p.y + z * 0.13, r, ns);
+      dot(ctx, p.x + z * 0.5, p.y + z * 0.87, r, ns);
+      dot(ctx, p.x + z * 0.13, p.y + z * 0.5, r, ew);
+      dot(ctx, p.x + z * 0.87, p.y + z * 0.5, r, ew);
+    }
+  }
+
+  /** How many people are standing on each platform, over the station itself. */
+  private drawStationBadges(sim: Simulation): void {
+    const z = this.camera.zoom;
+    if (z < 7) return;
+
+    for (const badge of this.stationBadges) {
+      const waiting = sim.stats.waitingAt(badge.id);
+      if (waiting === 0) continue;
+      this.drawBadge(badge.x, badge.y - z * 0.35, `${waiting}人待ち`, z);
+    }
+  }
+
+  /** A small dark chip with a number in it, sized off the zoom. */
+  private drawBadge(cx: number, cy: number, text: string, z: number): void {
+    const ctx = this.ctx;
+    const fontSize = Math.max(9, Math.min(15, z * 0.7));
+    ctx.font = `${fontSize}px system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    const w = ctx.measureText(text).width + fontSize * 0.7;
+    const h = fontSize * 1.35;
+    ctx.fillStyle = COLORS.badgeBackground;
+    ctx.fillRect(cx - w / 2, cy - h / 2, w, h);
+    ctx.fillStyle = COLORS.badgeText;
+    ctx.fillText(text, cx, cy);
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
   }
 
   /** Stations already picked in the line tool, so the player can see the plan. */
@@ -320,6 +451,68 @@ export class Renderer {
     ctx.lineWidth = 1.5;
     ctx.strokeRect(p.x, p.y, camera.zoom, camera.zoom);
   }
+}
+
+interface Pose {
+  x: number;
+  y: number;
+  /** Rotation in radians, pointing the way the agent is travelling. */
+  angle: number;
+}
+
+/**
+ * Where to draw an agent and which way to point it.
+ *
+ * The heading comes from the route rather than from the last frame's movement:
+ * a car stopped at a red light has not moved, and a car that has just entered
+ * a tile has moved a rounding error, so motion-derived headings flicker
+ * exactly when the player is looking closest. The route knows the answer even
+ * when the car is stationary.
+ *
+ * The lane offset is that heading turned ninety degrees to the left. Traffic
+ * keeps left, so the two directions never overlap on the same tile.
+ */
+export function agentPose(c: Citizen, alpha: number): Pose {
+  const x = c.prevX + (c.x - c.prevX) * alpha;
+  const y = c.prevY + (c.y - c.prevY) * alpha;
+
+  const heading = headingVector(c);
+  if (!heading) return { x, y, angle: 0 };
+
+  const offset = c.mode === TravelMode.Car ? LANE_OFFSET : WALK_LANE_OFFSET;
+  return {
+    // Left of the heading in screen space, where y grows downwards.
+    x: x + heading.dy * offset,
+    y: y - heading.dx * offset,
+    angle: Math.atan2(heading.dy, heading.dx),
+  };
+}
+
+function headingVector(c: Citizen): { dx: number; dy: number } | null {
+  const path = c.path;
+  if (path && path.length >= 2) {
+    const seg = Math.min(path.length - 2, Math.max(0, Math.floor(c.s)));
+    const dx = tileCenterX(path[seg + 1]) - tileCenterX(path[seg]);
+    const dy = tileCenterY(path[seg + 1]) - tileCenterY(path[seg]);
+    if (dx !== 0 || dy !== 0) return { dx, dy };
+  }
+  const dx = c.x - c.prevX;
+  const dy = c.y - c.prevY;
+  const len = Math.hypot(dx, dy);
+  return len > 1e-6 ? { dx: dx / len, dy: dy / len } : null;
+}
+
+function dot(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  r: number,
+  color: string,
+): void {
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fill();
 }
 
 /** Face the train along its current motion, so the body reads as a train. */

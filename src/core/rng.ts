@@ -33,6 +33,12 @@ export class Rng {
   getState(): number {
     return this.state;
   }
+
+  /** Restoring a saved city has to restore the stream position with it, or
+   *  growth after a load would replay the same draws the save already made. */
+  setState(state: number): void {
+    this.state = state >>> 0;
+  }
 }
 
 /** Deterministic scalar derived from an id, for per-citizen jitter that must
