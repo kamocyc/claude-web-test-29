@@ -1,7 +1,11 @@
 import {
   CAR_FREE_SPEED,
+  CHAIN_INTERVAL_MINUTES,
+  FIELD_INTERVAL_MINUTES,
   GROWTH_INTERVAL_MINUTES,
+  MIGRATION_INTERVAL_MINUTES,
   PATH_REQUESTS_PER_TICK,
+  POWER_INTERVAL_MINUTES,
   WALK_DISTANCE_THRESHOLD,
   WALK_SPEED,
 } from '../config';
@@ -16,6 +20,12 @@ import { Crossings } from './crossings';
 import { Occupancy } from './occupancy';
 import { Signals } from './signals';
 import { Statistics } from './statistics';
+import { Economy } from './economy';
+import { PowerGrid } from './power';
+import { SupplyChain } from './goods';
+import { NoiseField } from './noise';
+import { LandValueField } from './landValue';
+import { Happiness } from './happiness';
 import { departForHomeMinute, departForWorkMinute, inDepartureWindow } from './schedule';
 import { findPath, PathCache } from './pathfinding';
 import { advanceTrain, carryPassengers } from './trains';
@@ -35,18 +45,29 @@ export class Simulation {
   readonly stats = new Statistics();
   readonly traffic = new TrafficMemory();
   readonly pathCache = new PathCache();
+  readonly economy = new Economy();
+  readonly power = new PowerGrid();
+  readonly chain = new SupplyChain();
+  readonly noise = new NoiseField();
+  readonly landValue = new LandValueField();
+  readonly happiness = new Happiness();
 
   strandedCount = 0;
 
   private pathQueue: Citizen[] = [];
 
   /**
-   * The growth bucket already evaluated. Public because a save has to carry
-   * it: starting a loaded city back at -1 would run an extra growth step the
-   * moment it resumed, so every save/load cycle would quietly inflate the
-   * town.
+   * The last bucket evaluated for each thing that runs on a slow cadence.
+   * Public because a save has to carry them: starting a loaded city back at
+   * -1 would run an extra growth step (and an extra day's tax) the moment it
+   * resumed, so every save/load cycle would quietly inflate the town.
    */
   lastGrowthBucket = -1;
+  lastPowerBucket = -1;
+  lastChainBucket = -1;
+  lastFieldBucket = -1;
+  lastMigrationBucket = -1;
+  lastSettledDay = -1;
 
   constructor(readonly world: World) {}
 
@@ -59,7 +80,8 @@ export class Simulation {
     this.signals.refresh(this.world);
     this.rescueOrphanedRiders();
     this.moveCitizens();
-    this.maybeGrow();
+    this.noise.sample(this.occupancy);
+    this.runCity();
     // Last, so the census always includes anyone who moved in this tick.
     this.stats.sample(this.world);
   }
@@ -74,12 +96,12 @@ export class Simulation {
 
       switch (c.state) {
         case CitizenState.AtHome:
-          if (inDepartureWindow(minute, departForWorkMinute(c.id), DEPARTURE_WINDOW_MINUTES)) {
+          if (inDepartureWindow(minute, departForWorkMinute(c.seed), DEPARTURE_WINDOW_MINUTES)) {
             this.beginTrip(c, CitizenState.ToWork, c.work);
           }
           break;
         case CitizenState.AtWork:
-          if (inDepartureWindow(minute, departForHomeMinute(c.id), DEPARTURE_WINDOW_MINUTES)) {
+          if (inDepartureWindow(minute, departForHomeMinute(c.seed), DEPARTURE_WINDOW_MINUTES)) {
             this.beginTrip(c, CitizenState.ToHome, c.home);
           }
           break;
@@ -271,6 +293,7 @@ export class Simulation {
       return;
     }
     c.state = c.state === CitizenState.ToWork ? CitizenState.AtWork : CitizenState.AtHome;
+    c.lastTripTicks = Math.max(0, this.clock.tick - c.tripStartTick);
     this.stats.recordTrip(c, this.clock.tick);
   }
 
@@ -298,13 +321,66 @@ export class Simulation {
     }
   }
 
-  // --- Growth --------------------------------------------------------------
+  // --- The city ------------------------------------------------------------
 
-  private maybeGrow(): void {
-    const bucket = Math.floor(this.clock.minuteOfDay / GROWTH_INTERVAL_MINUTES);
-    if (bucket === this.lastGrowthBucket) return;
-    this.lastGrowthBucket = bucket;
-    growCity(this.world);
+  /**
+   * Everything that runs slower than a tick, in the order the city depends on
+   * it.
+   *
+   * The order is the causal chain and is not arbitrary. Power decides which
+   * buildings work at all; the supply chain then runs on the ones that do;
+   * the noise and land value fields are a consequence of both; happiness
+   * reads those fields; migration acts on happiness; and growth builds for
+   * the population migration just produced. Running any of these on the
+   * previous hour's answer would show up directly as the panels disagreeing
+   * with the map.
+   */
+  private runCity(): void {
+    const minute = this.clock.minuteOfDay;
+
+    if (this.due('lastPowerBucket', minute, POWER_INTERVAL_MINUTES)) {
+      this.power.update(this.world);
+    }
+    if (this.due('lastChainBucket', minute, CHAIN_INTERVAL_MINUTES)) {
+      this.chain.step(this.world, this.power);
+    }
+    if (this.due('lastFieldBucket', minute, FIELD_INTERVAL_MINUTES)) {
+      this.noise.update(this.world);
+      this.landValue.update(this.world, this.noise);
+      this.happiness.update(
+        this.world,
+        this.landValue,
+        this.noise,
+        this.chain.serviceLevel(this.world),
+        this.economy,
+        this.clock.tick,
+      );
+    }
+    if (this.due('lastMigrationBucket', minute, MIGRATION_INTERVAL_MINUTES)) {
+      this.happiness.migrate(this.world);
+    }
+    if (this.due('lastGrowthBucket', minute, GROWTH_INTERVAL_MINUTES)) {
+      growCity(this.world, (tile) => this.landValue.at(tile));
+    }
+
+    // The books close once a day, at midnight.
+    if (this.clock.day !== this.lastSettledDay) {
+      if (this.lastSettledDay >= 0) this.economy.settleDay(this.world);
+      this.lastSettledDay = this.clock.day;
+    }
+  }
+
+  /** True once per bucket of `everyMinutes`, remembering the last one seen. */
+  private due(
+    field: 'lastPowerBucket' | 'lastChainBucket' | 'lastFieldBucket'
+      | 'lastMigrationBucket' | 'lastGrowthBucket',
+    minute: number,
+    everyMinutes: number,
+  ): boolean {
+    const bucket = Math.floor(minute / everyMinutes);
+    if (bucket === this[field]) return false;
+    this[field] = bucket;
+    return true;
   }
 
   /**

@@ -139,9 +139,6 @@ export const WORK_START_MINUTE = 9 * 60;
 export const WORK_END_MINUTE = 17 * 60;
 export const SCHEDULE_JITTER_MINUTES = 60;
 
-export const HOUSEHOLDS_PER_RESIDENCE = 4;
-export const JOBS_PER_COMMERCE = 6;
-
 /** Population ceiling, matching the ~2000 citizens the design targets. */
 export const MAX_POPULATION = 2000;
 
@@ -150,6 +147,20 @@ export const MAX_POPULATION = 2000;
 /** Growth is evaluated once per sim hour (25 real seconds at x1). */
 export const GROWTH_INTERVAL_MINUTES = 60;
 export const BUILDINGS_PER_GROWTH_STEP = 3;
+
+/**
+ * The town keeps a standing surplus of vacant jobs. Without that buffer the
+ * two sides settle into exact balance -- no vacancies, so nobody moves in;
+ * nobody unemployed, so no new workplaces -- and the city stops dead a few
+ * buildings in.
+ */
+export const JOB_SURPLUS_RATIO = 0.15;
+
+/** Land value a tile needs before anyone will build a block of flats on it. */
+export const HIGH_DENSITY_LAND_VALUE = 55;
+
+/** Sim-hours a business survives with nothing to work with before closing. */
+export const ABANDON_AFTER_HOURS = 72;
 
 // --- Pathfinding -----------------------------------------------------------
 
@@ -188,3 +199,109 @@ export const WALK_LANE_OFFSET = 0.34;
 
 /** Completed trips kept for the rolling averages shown in the stats panel. */
 export const TRIP_HISTORY_SIZE = 300;
+
+// --- Power -----------------------------------------------------------------
+
+/**
+ * One plant runs about 150 low-density homes, or 30 factories.
+ *
+ * Sized against its upkeep rather than against anything electrical: a city
+ * should need a handful of plants, not dozens, because the interesting
+ * decision is where to put a noisy one -- not clicking twelve of them.
+ */
+export const POWER_PLANT_OUTPUT = 600;
+
+/** The grid is re-solved on this cadence; it only changes when the city does. */
+export const POWER_INTERVAL_MINUTES = 30;
+
+// --- Supply chain ----------------------------------------------------------
+
+/**
+ * How far goods will travel between two buildings on the same road network.
+ * Beyond this the chain simply does not connect, which is what makes an
+ * industrial estate on the far edge of the map a mistake rather than a detail.
+ */
+export const SUPPLY_RANGE_TILES = 90;
+
+/**
+ * Units a resident buys per day. This one number sets the size of the whole
+ * chain: at 1.0 a thousand people need about ten factories behind their shops,
+ * and ten farms or mines behind those.
+ */
+export const GOODS_PER_RESIDENT_PER_DAY = 1.0;
+
+/** The chain, like growth, ticks once per sim hour. */
+export const CHAIN_INTERVAL_MINUTES = 60;
+
+// --- Money -----------------------------------------------------------------
+// The numbers below were set by running a working city and reading the daily
+// balance: a compact town that feeds its shops and does not over-build roads
+// runs a small surplus, and one that sprawls does not. Construction is a
+// one-off the player can save up for; upkeep is forever, which is what makes
+// the size of the road network a decision rather than a free choice.
+
+export const STARTING_FUNDS = 250_000;
+
+export const BUILD_COSTS = {
+  road: 45,
+  rail: 120,
+  zone: 25,
+  station: 4_000,
+  powerPlant: 22_000,
+  bulldoze: 15,
+} as const;
+
+export const UPKEEP_PER_ROAD_TILE = 0.5;
+export const UPKEEP_PER_RAIL_TILE = 1.5;
+
+export const LOAN_TRANCHE = 50_000;
+export const MAX_DEBT = 400_000;
+export const DEBT_INTEREST_PER_DAY = 0.004;
+/** Unauthorised borrowing costs more than the arranged kind. */
+export const OVERDRAFT_INTEREST_PER_DAY = 0.02;
+
+export const TAX_RATE_LIMITS: readonly [number, number] = [0, 0.3];
+
+/** The books are closed once a sim day, at midnight. */
+export const TAX_DAY_MINUTE = 0;
+
+// --- Noise, land value, happiness -------------------------------------------
+
+/**
+ * Noise added per car-tick observed on a tile.
+ *
+ * Set by looking at what it does to land value rather than at anything
+ * acoustic: a quiet residential street should barely register, while a jammed
+ * arterial should be worth avoiding when siting housing. Too high and the
+ * whole city is unliveable the moment it has traffic, which makes the field
+ * useless as a thing to design around.
+ */
+export const TRAFFIC_NOISE_PER_CAR = 13;
+
+/** How fast the noise field follows what is happening now. */
+export const NOISE_SMOOTHING = 0.35;
+
+/** Fields are rebuilt every sim hour: they are slow-moving by construction. */
+export const FIELD_INTERVAL_MINUTES = 60;
+
+/**
+ * Commute time at which a citizen is thoroughly fed up, in sim minutes.
+ * Anything under a third of this is a commute nobody complains about.
+ */
+export const COMMUTE_MISERY_MINUTES = 180;
+
+/** Happiness below this, sustained, and a citizen leaves the city. */
+export const UNHAPPY_THRESHOLD = 30;
+
+/** Sim-hours of misery before someone actually packs up. */
+export const PATIENCE_HOURS = 48;
+
+/** Migration is evaluated once per sim hour, with growth. */
+export const MIGRATION_INTERVAL_MINUTES = 60;
+
+/**
+ * People who move in per hour, at most, when the city is at its most
+ * attractive. Scaled down by how happy the place actually is, so a mediocre
+ * town grows slowly and a miserable one not at all.
+ */
+export const MOVE_IN_PER_HOUR = 26;

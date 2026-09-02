@@ -1,6 +1,6 @@
 import { MAP_SIZE } from '../config';
 import { idx, inBounds } from '../core/grid';
-import { Terrain, Zone, type TileIndex } from '../core/types';
+import { Resource, Terrain, Zone, type TileIndex } from '../core/types';
 
 /**
  * Parallel byte layers over the same 128x128 grid. Typed arrays keep the whole
@@ -13,6 +13,8 @@ export class TileMap {
   readonly road = new Uint8Array(MAP_SIZE * MAP_SIZE);
   readonly rail = new Uint8Array(MAP_SIZE * MAP_SIZE);
   readonly zone = new Uint8Array(MAP_SIZE * MAP_SIZE);
+  /** What the ground is good for. Primary industry is tied to this layer. */
+  readonly resource = new Uint8Array(MAP_SIZE * MAP_SIZE);
   /** Tile -> building id, or -1. */
   readonly building = new Int32Array(MAP_SIZE * MAP_SIZE).fill(-1);
 
@@ -44,6 +46,14 @@ export class TileMap {
 
   getZone(i: TileIndex): Zone {
     return this.zone[i] as Zone;
+  }
+
+  getResource(i: TileIndex): Resource {
+    return i >= 0 ? (this.resource[i] as Resource) : Resource.None;
+  }
+
+  isWater(i: TileIndex): boolean {
+    return i >= 0 && this.terrain[i] === Terrain.Water;
   }
 
   at(x: number, y: number): TileIndex {

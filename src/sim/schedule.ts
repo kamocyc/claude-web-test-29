@@ -4,22 +4,21 @@ import {
   WORK_START_MINUTE,
 } from '../config';
 import { scheduleJitter } from './citizen';
-import type { CitizenId } from '../core/types';
 
 const SALT_MORNING = 0x9e37;
 const SALT_EVENING = 0x85eb;
 
 /**
- * Departure times are derived from the citizen id, not stored and not drawn
- * from the shared RNG, so they are stable across reloads and independent of
- * the order citizens are created in.
+ * Departure times are derived from the citizen's seed, not stored and not
+ * drawn from the shared RNG, so they are stable across reloads, independent of
+ * the order citizens are created in, and unaffected by anyone else moving out.
  */
-export function departForWorkMinute(id: CitizenId): number {
-  return wrapDay(WORK_START_MINUTE + scheduleJitter(id, SALT_MORNING) * SCHEDULE_JITTER_MINUTES);
+export function departForWorkMinute(seed: number): number {
+  return wrapDay(WORK_START_MINUTE + scheduleJitter(seed, SALT_MORNING) * SCHEDULE_JITTER_MINUTES);
 }
 
-export function departForHomeMinute(id: CitizenId): number {
-  return wrapDay(WORK_END_MINUTE + scheduleJitter(id, SALT_EVENING) * SCHEDULE_JITTER_MINUTES);
+export function departForHomeMinute(seed: number): number {
+  return wrapDay(WORK_END_MINUTE + scheduleJitter(seed, SALT_EVENING) * SCHEDULE_JITTER_MINUTES);
 }
 
 function wrapDay(m: number): number {

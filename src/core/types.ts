@@ -9,16 +9,59 @@ export const enum Terrain {
   Water = 1,
 }
 
+/**
+ * What a tile is naturally good for. Primary industry can only be zoned where
+ * the ground supports it, which is what stops a city from being a uniform
+ * sheet of interchangeable land: a paddy needs fertile ground by the river, a
+ * mine needs the ore seam, a wharf needs the water.
+ */
+export const enum Resource {
+  None = 0,
+  /** Fertile ground, near the river. Paddy fields. */
+  Fertile = 1,
+  Forest = 2,
+  Ore = 3,
+}
+
 export const enum Zone {
   None = 0,
-  Residential = 1,
-  Commercial = 2,
+  ResidentialLow = 1,
+  ResidentialHigh = 2,
+  Commercial = 3,
+  Industrial = 4,
+  Office = 5,
+  Farm = 6,
+  Forestry = 7,
+  Fishery = 8,
+  Mining = 9,
 }
 
 export const enum BuildingType {
-  Residence = 0,
-  Commerce = 1,
-  Station = 2,
+  House = 0,
+  Apartment = 1,
+  Shop = 2,
+  Factory = 3,
+  Office = 4,
+  Farm = 5,
+  ForestryCamp = 6,
+  FishingWharf = 7,
+  Mine = 8,
+  Station = 9,
+  PowerPlant = 10,
+}
+
+/** What a building does in the supply chain. */
+export const enum Industry {
+  /** Houses, stations, power plants: no part in the chain. */
+  None = 0,
+  /** Farm, forestry, fishery, mine: produce raw materials from nothing. */
+  Primary = 1,
+  /** Factories: turn raw materials into goods. */
+  Secondary = 2,
+  /** Shops: sell goods to residents, which is where commercial tax comes from. */
+  Retail = 3,
+  /** Offices: employ people and produce neither, but pay well and are quiet. */
+  Tertiary = 4,
 }
 
 export const enum CitizenState {

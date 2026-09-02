@@ -4,6 +4,7 @@ import { idx, tileX } from '../core/grid';
 import { CitizenState, TravelMode, Zone } from '../core/types';
 import { Simulation } from '../sim/simulation';
 import { World } from '../world/world';
+import { powerTown } from './helpers';
 
 /**
  * A town laid out so commuters are forced through one shared arterial: houses
@@ -31,7 +32,7 @@ function buildTestTown(seed = 11, bridgeRows = 1): World {
     for (const x of [4, 21, 59, 76]) {
       const tile = idx(x, y);
       if (w.adjacentRoad(tile) >= 0) {
-        w.paintZone(tile, x < 40 ? Zone.Residential : Zone.Commercial);
+        w.paintZone(tile, x < 40 ? Zone.ResidentialLow : Zone.Commercial);
       }
     }
   }
@@ -39,10 +40,15 @@ function buildTestTown(seed = 11, bridgeRows = 1): World {
     for (let x = 5; x <= 75; x++) {
       const tile = idx(x, y);
       if (w.adjacentRoad(tile) >= 0) {
-        w.paintZone(tile, x < 40 ? Zone.Residential : Zone.Commercial);
+        w.paintZone(tile, x < 40 ? Zone.ResidentialLow : Zone.Commercial);
       }
     }
   }
+
+  // Every one of these towns is a working city, so it gets the electricity a
+  // working city needs: unpowered shops employ nobody, and a town with no jobs
+  // never grows enough traffic to be worth measuring.
+  powerTown(w, 2);
   return w;
 }
 

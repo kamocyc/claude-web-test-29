@@ -1,5 +1,12 @@
-import { idx } from './core/grid';
-import { BuildingType, CitizenState, Zone, type BuildingId, type TileIndex } from './core/types';
+import { idx, manhattan, tileX, tileY } from './core/grid';
+import {
+  BuildingType,
+  CitizenState,
+  Resource,
+  Zone,
+  type BuildingId,
+  type TileIndex,
+} from './core/types';
 import { Camera } from './render/camera';
 import { Renderer } from './render/renderer';
 import type { Citizen } from './sim/citizen';
@@ -9,7 +16,10 @@ import { Hud } from './ui/hud';
 import { Inspector } from './ui/inspector';
 import { StatsPanel } from './ui/stats';
 import { applyTool, isDragTool, Tool, TOOL_BY_KEY } from './ui/tools';
+import { BudgetPanel } from './ui/budget';
+import type { Overlay } from './render/renderer';
 import { createLine, createLineThrough } from './world/lineBuilder';
+import { findPath } from './sim/pathfinding';
 import { hasSavedCity, loadFromStorage, saveToStorage } from './world/persistence';
 import { World } from './world/world';
 
@@ -18,6 +28,7 @@ const ctx = canvas.getContext('2d')!;
 const hudRoot = document.getElementById('hud')!;
 const inspectorRoot = document.getElementById('inspector')!;
 const statsRoot = document.getElementById('stats')!;
+const budgetRoot = document.getElementById('budget')!;
 
 /**
  * The simulation is a `let` rather than a `const` because loading a save
@@ -30,10 +41,15 @@ const camera = new Camera();
 const renderer = new Renderer(ctx, camera);
 const inspector = new Inspector(inspectorRoot);
 const statsPanel = new StatsPanel(statsRoot);
+const budgetPanel = new BudgetPanel(budgetRoot, {
+  onRate: (category, delta) => sim.economy.setRate(category, sim.economy.rates[category] + delta),
+  onBorrow: () => say(sim.economy.borrow() ? '借入しました' : 'これ以上は借りられません'),
+  onRepay: () => say(sim.economy.repay() ? '返済しました' : '返済できる残高がありません'),
+});
 
 let tool: Tool = Tool.Road;
 let showZones = true;
-let showTraffic = true;
+let overlay: Overlay = 'none';
 let hoverTile: TileIndex = -1;
 
 /** Stations picked so far with the line tool, in order. */
@@ -53,7 +69,7 @@ const hud = new Hud(hudRoot, {
   },
   onSpeed: (i) => sim.clock.setSpeedIndex(i),
   onToggleZones: () => (showZones = !showZones),
-  onToggleTraffic: () => (showTraffic = !showTraffic),
+  onOverlay: (o) => (overlay = overlay === o ? 'none' : o),
   onPickRandom: pickRandomCitizen,
   onCommitLine: commitLine,
   onCancelLine: () => {
@@ -74,11 +90,8 @@ attachInput(canvas, camera, {
       return;
     }
     if (tool === Tool.Select) return;
-    if (tool === Tool.Station && !applyTool(sim.world, tool, tile)) {
-      say('駅は道路に接する空きタイルにしか置けません');
-      return;
-    }
-    applyTool(sim.world, tool, tile);
+    const result = applyTool(sim.world, sim.economy, tool, tile);
+    if (!result.applied && result.message) say(result.message);
   },
   onSelectAt: (wx, wy) => {
     if (tool === Tool.Select) selectAt(wx, wy);
@@ -92,7 +105,7 @@ attachInput(canvas, camera, {
     if (next !== Tool.Line) pendingStations = [];
   },
   onToggleZones: () => (showZones = !showZones),
-  onToggleTraffic: () => (showTraffic = !showTraffic),
+  onOverlayKey: (o) => (overlay = overlay === o ? 'none' : o),
   isDragging: () => isDragTool(tool),
 });
 
@@ -177,12 +190,12 @@ function resize(): void {
 window.addEventListener('resize', resize);
 resize();
 
-/** A click picks the station under the cursor, or else the nearest traveller. */
+/** A click picks the building under the cursor, or else the nearest traveller. */
 function selectAt(wx: number, wy: number): void {
   const tile = sim.world.map.at(Math.floor(wx), Math.floor(wy));
   const bid = tile >= 0 ? sim.world.map.building[tile] : -1;
   const building = bid >= 0 ? sim.world.buildings[bid] : undefined;
-  if (building && building.alive && building.type === BuildingType.Station) {
+  if (building && building.alive) {
     inspector.selectStation(building);
     return;
   }
@@ -221,13 +234,20 @@ function pickRandomCitizen(): void {
 
 /**
  * The opening scenario: two districts -- housing in the west, workplaces in
- * the east -- separated by a gap that only two roads and one railway cross.
+ * the east -- separated by a gap that only two roads and one railway cross,
+ * with a power station, a small industrial strip, and whatever primary
+ * industry the ground nearby happens to support.
  *
  * The shape is the point. A uniform grid has spare capacity everywhere, so
  * nothing ever jams and driving always wins; the interesting decisions only
  * appear once the connection between where people live and where they work is
  * the scarce thing. Here the corridor congests at rush hour, and that is
  * exactly when the train starts winning the comparison.
+ *
+ * The town is deliberately started *incomplete*: it has enough of a supply
+ * chain to be alive and not enough to stay that way, so the first thing the
+ * player has to do is find the fertile ground, the woods or the seam, and
+ * connect them.
  */
 function seedStartingTown(): void {
   const world = sim.world;
@@ -257,7 +277,7 @@ function seedStartingTown(): void {
     }
   };
 
-  district(west, Zone.Residential);
+  district(west, Zone.ResidentialLow);
   district(east, Zone.Commercial);
 
   // Two road links across the gap. Everything drives through these, which is
@@ -282,6 +302,125 @@ function seedStartingTown(): void {
     if (station) stations.push(station.id);
   }
   createLine(world, stations);
+
+  // Industry along the southern edge of the commercial district, downwind of
+  // the housing: close enough to supply the shops, far enough that the noise
+  // does not land on anybody's home.
+  for (let x = east.x; x <= east.x + east.w; x++) {
+    for (let y = top + height - 4; y <= top + height; y++) {
+      const tile = idx(x, y);
+      if (world.adjacentRoad(tile) >= 0) world.paintZone(tile, Zone.Industrial);
+    }
+  }
+
+  // Two plants on the eastern edge, where there is room and nobody lives. The
+  // service road goes in first: a plant needs a road to feed the cable into.
+  for (const y of [top + 2, top + height - 2]) {
+    world.placeRoad(idx(east.x + east.w + 1, y));
+    world.placePowerPlant(idx(east.x + east.w + 2, y));
+  }
+
+  seedPrimaryIndustry(world);
+}
+
+/**
+ * Zone whatever primary industry the ground around the town supports, and put
+ * a road to it.
+ *
+ * The deposits are generated from the map seed, so this cannot be hand-placed:
+ * it looks for the nearest patch of each kind, runs a road out to it and zones
+ * a few tiles. That leaves the player with one of each industry working and
+ * the obvious next move -- expanding the one their land is actually good for.
+ */
+function seedPrimaryIndustry(world: World): void {
+  const town = idx(92, 64);
+  for (const [resource, zone] of [
+    [Resource.Fertile, Zone.Farm],
+    [Resource.Forest, Zone.Forestry],
+    [Resource.Ore, Zone.Mining],
+  ] as const) {
+    const patch = nearestResource(world, town, resource);
+    if (patch < 0) continue;
+
+    // The spur has to start from a tile that is already road: a lane that
+    // touches nothing is off the network, which means off the power grid and
+    // out of reach of the factories -- the outpost would be dead on arrival.
+    const from = nearestRoad(world, patch);
+    if (from < 0) continue;
+
+    const laid = connectByRoad(world, from, patch);
+    // The river will not be bridged by a road tool that refuses to build on
+    // water, so a spur can end up on the far bank with a gap in the middle.
+    // An outpost the city cannot reach is worse than no outpost, so the spur
+    // is taken back up rather than left as a stub.
+    if (!findPath(world.roads, from, patch)) {
+      for (const tile of laid) world.bulldoze(tile);
+      continue;
+    }
+
+    // A service road across the patch, and the ground either side of it zoned:
+    // enough to feed a couple of factories, and nowhere near enough to feed
+    // the city this will grow into.
+    const px = tileX(patch);
+    const py = tileY(patch);
+    for (let dx = -3; dx <= 3; dx++) world.placeRoad(world.map.at(px + dx, py));
+    for (let dx = -3; dx <= 3; dx++) {
+      for (const dy of [-1, 1]) {
+        const tile = world.map.at(px + dx, py + dy);
+        if (tile >= 0 && world.map.getResource(tile) === resource) world.paintZone(tile, zone);
+      }
+    }
+  }
+}
+
+/** The road tile closest to `tile`, or -1 if the city has no roads at all. */
+function nearestRoad(world: World, tile: TileIndex): TileIndex {
+  let best = -1;
+  let bestDistance = Infinity;
+  for (let i = 0; i < world.map.road.length; i++) {
+    if (!world.map.isRoad(i)) continue;
+    const d = manhattan(tile, i);
+    if (d < bestDistance) {
+      bestDistance = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
+function nearestResource(world: World, from: TileIndex, resource: Resource): TileIndex {
+  let best = -1;
+  let bestDistance = Infinity;
+  for (let tile = 0; tile < world.map.resource.length; tile++) {
+    if (world.map.getResource(tile) !== resource) continue;
+    const d = manhattan(from, tile);
+    if (d < bestDistance) {
+      bestDistance = d;
+      best = tile;
+    }
+  }
+  return best;
+}
+
+/** An L-shaped road between two tiles. Returns the tiles it actually laid. */
+function connectByRoad(world: World, from: TileIndex, to: TileIndex): TileIndex[] {
+  const laid: TileIndex[] = [];
+  let x = tileX(from);
+  let y = tileY(from);
+  const tx = tileX(to);
+  const ty = tileY(to);
+  const step = (tile: TileIndex): void => {
+    if (world.placeRoad(tile)) laid.push(tile);
+  };
+  while (x !== tx) {
+    x += Math.sign(tx - x);
+    step(idx(x, y));
+  }
+  while (y !== ty) {
+    y += Math.sign(ty - y);
+    step(idx(x, y));
+  }
+  return laid;
 }
 
 let lastTime = performance.now();
@@ -299,16 +438,17 @@ function frame(now: number): void {
 
   renderer.draw(sim, sim.clock.alpha, {
     showZones,
-    showTraffic,
+    overlay,
     hoverTile,
     selected: inspector.selected,
     pendingStations,
   });
 
   if (now > noticeUntil) notice = '';
-  hud.update(sim, tool, pendingStations, notice);
+  hud.update(sim, tool, overlay, pendingStations, notice);
   inspector.update(sim);
   statsPanel.update(sim, now);
+  budgetPanel.update(sim, now);
 
   requestAnimationFrame(frame);
 }

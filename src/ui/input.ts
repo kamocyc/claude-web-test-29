@@ -1,6 +1,7 @@
 import { idx, inBounds } from '../core/grid';
 import type { TileIndex } from '../core/types';
 import type { Camera } from '../render/camera';
+import type { Overlay } from '../render/renderer';
 
 export interface InputHandlers {
   onPaint(tile: TileIndex): void;
@@ -11,7 +12,7 @@ export interface InputHandlers {
   /** Whether the active tool paints on drag, checked at drag time. */
   isDragging(): boolean;
   onToggleZones(): void;
-  onToggleTraffic(): void;
+  onOverlayKey(overlay: Overlay): void;
 }
 
 /**
@@ -93,11 +94,30 @@ export function attachInput(
   );
 
   window.addEventListener('keydown', (e) => {
-    if (e.key >= '1' && e.key <= '8') handlers.onToolKey(e.key);
-    else if (e.key === ' ') {
+    const key = e.key.toLowerCase();
+    const overlay = OVERLAY_KEYS[key];
+    if (overlay) {
+      handlers.onOverlayKey(overlay);
+      return;
+    }
+    if (key === ' ') {
       e.preventDefault();
       handlers.onSpeedKey(0);
-    } else if (e.key === 'z' || e.key === 'Z') handlers.onToggleZones();
-    else if (e.key === 't' || e.key === 'T') handlers.onToggleTraffic();
+      return;
+    }
+    if (key === 'z') {
+      handlers.onToggleZones();
+      return;
+    }
+    handlers.onToolKey(key);
   });
 }
+
+/** Overlay shortcuts, kept out of the tool table so they cannot collide. */
+const OVERLAY_KEYS: Readonly<Record<string, Overlay>> = {
+  '0': 'none',
+  t: 'traffic',
+  p: 'power',
+  n: 'noise',
+  v: 'landValue',
+};

@@ -3,6 +3,7 @@ import { idx, neighbors } from '../core/grid';
 import { Rng } from '../core/rng';
 import {
   BuildingType,
+  Resource,
   Terrain,
   Zone,
   type BuildingId,
@@ -10,7 +11,8 @@ import {
   type TileIndex,
 } from '../core/types';
 import type { Citizen } from '../sim/citizen';
-import { capacityFor, type Building } from './buildings';
+import { capacityFor, isHome, isWorkplace, specFor, type Building } from './buildings';
+import { groundSupports } from './zoneRules';
 import { TileMap } from './tileMap';
 import { TileNetwork } from './tileNetwork';
 import { LINE_COLORS, type TransitLine, type Train } from './transit';
@@ -28,6 +30,13 @@ export class World {
   /** Bumped whenever buildings or lines appear or vanish, so UI can refresh. */
   revision = 0;
 
+  /**
+   * Handed to each new citizen as their permanent identity. It only ever goes
+   * up, so two people who lived here at different times never share one, even
+   * though the id array is compacted when somebody leaves.
+   */
+  nextCitizenSeed = 0;
+
   constructor(seed = 1) {
     this.rng = new Rng(seed);
     this.roads = new TileNetwork((t) => this.map.isRoad(t));
@@ -40,14 +49,70 @@ export class World {
     // road layout has something to route around.
     const t = this.map.terrain;
     t.fill(Terrain.Grass);
+    const river: number[] = [];
     let x = MAP_SIZE * 0.3;
     for (let y = 0; y < MAP_SIZE; y++) {
       x += this.rng.range(-0.9, 0.9);
       x = Math.min(MAP_SIZE - 6, Math.max(5, x));
+      river.push(x);
       const width = 2 + Math.floor(this.rng.next() * 2);
       for (let w = -width; w <= width; w++) {
         const px = Math.round(x + w);
         if (px >= 0 && px < MAP_SIZE) t[idx(px, y)] = Terrain.Water;
+      }
+    }
+    this.generateResources(river);
+  }
+
+  /**
+   * Where the primary industries can go.
+   *
+   * The three deposits are laid down in a fixed order rather than by one noise
+   * function, because each one wants a different relationship to the map: the
+   * fertile ground follows the river (that is what makes it fertile), the
+   * forest wants to be somewhere the city has to reach out to, and the ore
+   * wants to be in a couple of concentrated seams so that mining is a place
+   * rather than an option available everywhere.
+   */
+  private generateResources(river: number[]): void {
+    const r = this.map.resource;
+    r.fill(Resource.None);
+
+    // Fertile flood plain: a band either side of the river.
+    for (let y = 0; y < MAP_SIZE; y++) {
+      const cx = river[y];
+      for (let dx = -9; dx <= 9; dx++) {
+        const px = Math.round(cx + dx);
+        if (px < 0 || px >= MAP_SIZE) continue;
+        const tile = idx(px, y);
+        if (this.map.terrain[tile] === Terrain.Water) continue;
+        if (Math.abs(dx) > 4) r[tile] = Resource.Fertile;
+      }
+    }
+
+    // A handful of woods and seams, as round blobs with ragged edges.
+    this.scatter(Resource.Forest, 7, 9, 15);
+    this.scatter(Resource.Ore, 3, 5, 8);
+  }
+
+  private scatter(kind: Resource, count: number, minRadius: number, maxRadius: number): void {
+    for (let n = 0; n < count; n++) {
+      const cx = this.rng.int(MAP_SIZE);
+      const cy = this.rng.int(MAP_SIZE);
+      const radius = this.rng.range(minRadius, maxRadius);
+      const x0 = Math.max(0, Math.floor(cx - radius));
+      const x1 = Math.min(MAP_SIZE - 1, Math.ceil(cx + radius));
+      const y0 = Math.max(0, Math.floor(cy - radius));
+      const y1 = Math.min(MAP_SIZE - 1, Math.ceil(cy + radius));
+
+      for (let y = y0; y <= y1; y++) {
+        for (let x = x0; x <= x1; x++) {
+          const d = Math.hypot(x - cx, y - cy);
+          if (d > radius * this.rng.range(0.75, 1)) continue;
+          const tile = idx(x, y);
+          if (this.map.terrain[tile] === Terrain.Water) continue;
+          this.map.resource[tile] = kind;
+        }
       }
     }
   }
@@ -79,15 +144,23 @@ export class World {
     return true;
   }
 
-  /** Zoning only takes on tiles touching a road -- buildings need access. */
+  /**
+   * Zoning takes on tiles that touch a road and whose ground supports the
+   * zone. Buildings need access, and primary industry needs its resource.
+   */
   paintZone(tile: TileIndex, zone: Zone): boolean {
-    if (tile < 0) return false;
-    if (!this.map.isBuildable(tile)) return false;
-    if (this.adjacentRoad(tile) < 0) return false;
+    if (!this.canZone(tile, zone)) return false;
     if (this.map.zone[tile] === zone) return false;
 
     this.map.zone[tile] = zone;
     return true;
+  }
+
+  canZone(tile: TileIndex, zone: Zone): boolean {
+    if (tile < 0) return false;
+    if (!this.map.isBuildable(tile)) return false;
+    if (this.adjacentRoad(tile) < 0) return false;
+    return groundSupports(this.map, zone, tile);
   }
 
   /**
@@ -101,6 +174,16 @@ export class World {
    * track adopts it as its platform; one placed on open ground gets its
    * platform when a line is run through it.
    */
+  /**
+   * Power plants are placed by the player rather than grown, like stations:
+   * they are infrastructure the city pays for, not something demand produces.
+   */
+  placePowerPlant(tile: TileIndex): Building | null {
+    if (tile < 0 || !this.map.isBuildable(tile)) return null;
+    if (this.adjacentRoad(tile) < 0) return null;
+    return this.addBuilding(tile, BuildingType.PowerPlant);
+  }
+
   placeStation(tile: TileIndex): Building | null {
     if (tile < 0 || !this.map.isBuildable(tile)) return null;
     if (this.adjacentRoad(tile) < 0) return null;
@@ -175,11 +258,21 @@ export class World {
       capacity: capacityFor(type),
       occupants: [],
       alive: true,
+      powered: false,
+      rawStock: 0,
+      goodsStock: 0,
+      soldToday: 0,
+      starvedHours: 0,
     };
     this.buildings.push(b);
     this.map.building[tile] = b.id;
     this.revision++;
     return b;
+  }
+
+  /** Remove a building: the player bulldozing it, or the city abandoning it. */
+  demolish(id: BuildingId): void {
+    this.removeBuilding(id);
   }
 
   /**
@@ -193,7 +286,11 @@ export class World {
     this.map.building[b.tile] = -1;
     for (const cid of b.occupants) {
       const c = this.citizens[cid];
-      if (c) c.path = null;
+      if (!c) continue;
+      c.path = null;
+      // Losing your workplace makes you jobless, not stuck travelling to a
+      // building that is no longer there.
+      if (c.work === id) c.work = -1;
     }
     b.occupants = [];
     b.capacity = 0;
@@ -309,7 +406,7 @@ export class World {
   get jobCount(): number {
     let n = 0;
     for (const b of this.buildings) {
-      if (b.alive && b.type === BuildingType.Commerce) n += b.capacity;
+      if (b.alive && isWorkplace(b.type)) n += b.capacity;
     }
     return n;
   }
@@ -317,8 +414,32 @@ export class World {
   get employedCount(): number {
     let n = 0;
     for (const b of this.buildings) {
-      if (b.alive && b.type === BuildingType.Commerce) n += b.occupants.length;
+      if (b.alive && isWorkplace(b.type)) n += b.occupants.length;
     }
+    return n;
+  }
+
+  /** Total dwellings, whether or not anybody has moved in yet. */
+  get housingCapacity(): number {
+    let n = 0;
+    for (const b of this.buildings) {
+      if (b.alive && isHome(b.type)) n += b.capacity;
+    }
+    return n;
+  }
+
+  /** Daily upkeep of everything the city itself pays for. */
+  get infrastructureUpkeep(): number {
+    let total = 0;
+    for (const b of this.buildings) {
+      if (b.alive) total += specFor(b.type).upkeep;
+    }
+    return total;
+  }
+
+  countTiles(layer: Uint8Array): number {
+    let n = 0;
+    for (let i = 0; i < layer.length; i++) n += layer[i];
     return n;
   }
 }

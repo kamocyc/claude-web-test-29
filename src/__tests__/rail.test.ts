@@ -6,6 +6,7 @@ import { Occupancy } from '../sim/occupancy';
 import { Simulation } from '../sim/simulation';
 import { createLine } from '../world/lineBuilder';
 import { World } from '../world/world';
+import { powerTown } from './helpers';
 
 /**
  * Two clusters at opposite ends of a long corridor: housing in the west, jobs
@@ -41,12 +42,14 @@ function railTown(withRail: boolean): World {
     createLine(w, stations);
   }
 
+  powerTown(w);
+
   // Housing only in the west cluster, jobs only in the east one, so every
   // commute is the full length of the corridor.
   for (const row of [y - 1, y + 5]) {
     for (let x = WEST - 4; x <= WEST + 6; x++) {
       const tile = idx(x, row);
-      if (w.adjacentRoad(tile) >= 0) w.paintZone(tile, Zone.Residential);
+      if (w.adjacentRoad(tile) >= 0) w.paintZone(tile, Zone.ResidentialLow);
     }
     for (let x = EAST - 6; x <= EAST + 4; x++) {
       const tile = idx(x, row);
@@ -355,11 +358,12 @@ describe('mode choice', () => {
         for (let y = top; y <= top + height; y++) {
           const tile = idx(x, y);
           if (w.adjacentRoad(tile) >= 0) {
-            w.paintZone(tile, d === west ? Zone.Residential : Zone.Commercial);
+            w.paintZone(tile, d === west ? Zone.ResidentialLow : Zone.Commercial);
           }
         }
       }
     }
+    powerTown(w);
     return w;
   }
 

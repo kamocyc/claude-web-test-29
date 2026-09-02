@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import { TICKS_PER_DAY } from '../config';
 import { idx } from '../core/grid';
 import { CitizenState, Zone, type BuildingId } from '../core/types';
 import { Simulation } from '../sim/simulation';
 import { createLine } from '../world/lineBuilder';
 import { deserialize, serialize } from '../world/persistence';
+import { compactCity } from './helpers';
 import { World } from '../world/world';
+import { powerTown } from './helpers';
 
 /** A town with roads, rail, stations, a line and a running population. */
 function town(): World {
@@ -30,13 +33,14 @@ function town(): World {
   for (const row of [y - 1, y + 5]) {
     for (let x = 10; x <= 25; x++) {
       const tile = idx(x, row);
-      if (w.adjacentRoad(tile) >= 0) w.paintZone(tile, Zone.Residential);
+      if (w.adjacentRoad(tile) >= 0) w.paintZone(tile, Zone.ResidentialLow);
     }
     for (let x = 75; x <= 90; x++) {
       const tile = idx(x, row);
       if (w.adjacentRoad(tile) >= 0) w.paintZone(tile, Zone.Commercial);
     }
   }
+  powerTown(w);
   return w;
 }
 
@@ -115,6 +119,52 @@ describe('save and load', () => {
     const aboard = (s: Simulation): number =>
       s.world.trains.reduce((n, t) => n + t.passengers.length, 0);
     expect(aboard(restored)).toBe(aboard(sim));
+  });
+
+  it('carries the money, the stockpiles and the fields with it', () => {
+    const sim = new Simulation(compactCity());
+    run(sim, TICKS_PER_DAY * 2);
+    sim.economy.borrow();
+    sim.economy.setRate('commercial', 0.2);
+
+    const restored = deserialize(JSON.parse(JSON.stringify(serialize(sim))));
+
+    expect(restored.economy.balance).toBe(sim.economy.balance);
+    expect(restored.economy.debt).toBe(sim.economy.debt);
+    expect(restored.economy.rates).toEqual(sim.economy.rates);
+    expect(restored.lastSettledDay).toBe(sim.lastSettledDay);
+
+    // Stockpiles: a loaded city does not restart its supply chain from empty.
+    const stock = (s: Simulation): number =>
+      s.world.buildings.reduce((n, b) => n + b.goodsStock + b.rawStock, 0);
+    expect(stock(restored)).toBeCloseTo(stock(sim), 5);
+
+    // Fields and wellbeing.
+    for (let tile = 0; tile < 128 * 128; tile += 101) {
+      expect(restored.noise.at(tile)).toBeCloseTo(sim.noise.at(tile), 3);
+      expect(restored.landValue.at(tile)).toBeCloseTo(sim.landValue.at(tile), 3);
+    }
+    expect(restored.world.citizens.map((c) => [c.seed, Math.round(c.happiness)]))
+      .toEqual(sim.world.citizens.map((c) => [c.seed, Math.round(c.happiness)]));
+    expect(restored.world.nextCitizenSeed).toBe(sim.world.nextCitizenSeed);
+
+    // The resource layer is part of the map, so primary industry still has
+    // somewhere to be.
+    expect([...restored.world.map.resource]).toEqual([...sim.world.map.resource]);
+  });
+
+  it('continues a full city identically, economy and all', () => {
+    const sim = new Simulation(compactCity());
+    run(sim, TICKS_PER_DAY * 2);
+
+    const restored = deserialize(serialize(sim));
+    run(sim, TICKS_PER_DAY);
+    run(restored, TICKS_PER_DAY);
+
+    expect(restored.world.population).toBe(sim.world.population);
+    expect(restored.economy.balance).toBeCloseTo(sim.economy.balance, 6);
+    expect(restored.economy.lastDay.net).toBeCloseTo(sim.economy.lastDay.net, 6);
+    expect(fingerprint(restored)).toBe(fingerprint(sim));
   });
 
   it('refuses a save written by a different version', () => {

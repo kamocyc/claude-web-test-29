@@ -1,6 +1,7 @@
 import { TravelMode } from '../core/types';
 import type { Simulation } from '../sim/simulation';
 import type { LiveStats, TripStats } from '../sim/statistics';
+import { vacantDwellings } from '../sim/happiness';
 
 /** Rebuilt a few times a second; every frame would be wasted DOM work. */
 const REFRESH_MS = 250;
@@ -50,6 +51,8 @@ export class StatsPanel {
         bar('経路なし', live.stranded, live.population, '#ff4d5e'),
       ]),
       section('移動手段（外出中）', modeRows(live)),
+      wellbeingSection(sim),
+      citySection(sim),
       section('完了した移動', [
         row('のべ件数', `${trips.completed} 件`),
         row('平均所要', minutes(trips.meanMinutes)),
@@ -61,6 +64,46 @@ export class StatsPanel {
       lineSection(sim),
     );
   }
+}
+
+/** How the residents feel, in the same terms the happiness model uses. */
+function wellbeingSection(sim: Simulation): HTMLElement {
+  const h = sim.happiness.breakdown;
+  const migration = sim.happiness.lastMigration;
+  return section('幸福度', [
+    bar('総合', Math.round(h.overall), 100, moodColor(h.overall)),
+    bar('　住環境', Math.round(h.housing), 100, '#5fa8d3'),
+    bar('　通勤', Math.round(h.commute), 100, '#e0a458'),
+    bar('　雇用', Math.round(h.employment), 100, '#3ddc7f'),
+    bar('　買い物', Math.round(h.services), 100, '#d99ae0'),
+    bar('　電気', Math.round(h.power), 100, '#f0d24a'),
+    row('直近1時間の移住', `+${migration.movedIn} / -${migration.movedOut} 人`),
+    row('住宅の空き', `${vacantDwellings(sim.world)} 戸`),
+  ]);
+}
+
+/** Power, land value and the supply chain: the city's own vital signs. */
+function citySection(sim: Simulation): HTMLElement {
+  const power = sim.power.report;
+  const chain = sim.chain.report;
+  const rows = [
+    row('電力', `需要 ${Math.round(power.demand)} ／ 供給 ${Math.round(power.supply)}`),
+    row('　停電中の建物', `${power.unpowered} 件`),
+    row('平均地価', `${Math.round(sim.landValue.meanResidential(sim.world))} / 100`),
+    row('商品の供給', `${Math.round(sim.chain.serviceLevel(sim.world) * 100)}%`),
+    row('　一次産業の産出', `${chain.rawProduced.toFixed(0)} / 時`),
+    row('　工場の生産', `${chain.goodsProduced.toFixed(0)} / 時`),
+    row('　売れた商品', `${chain.goodsSold.toFixed(0)} / 時`),
+    row('　在庫切れの商店', `${chain.shopsEmpty} 軒`),
+    row('　原料切れの工場', `${chain.factoriesIdle} 軒`),
+  ];
+  return section('都市の状態', rows);
+}
+
+function moodColor(score: number): string {
+  if (score >= 60) return '#3ddc7f';
+  if (score >= 40) return '#e0a458';
+  return '#ff4d5e';
 }
 
 function modeRows(live: LiveStats): HTMLElement[] {

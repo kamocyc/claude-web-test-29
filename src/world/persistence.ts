@@ -1,6 +1,7 @@
 import { MAP_SIZE } from '../config';
 import type { CitizenState, TravelMode, BuildingType, TileIndex } from '../core/types';
 import type { Citizen } from '../sim/citizen';
+import type { TaxRates } from '../sim/economy';
 import { Simulation } from '../sim/simulation';
 import { setTrainPosition } from '../sim/trains';
 import type { RideLeg } from '../sim/transitPlanner';
@@ -8,7 +9,7 @@ import type { Building } from './buildings';
 import type { TransitLine, Train } from './transit';
 import { World } from './world';
 
-export const SAVE_VERSION = 2;
+export const SAVE_VERSION = 3;
 export const SAVE_KEY = 'city-sim.save';
 
 /**
@@ -29,19 +30,39 @@ export interface SaveData {
   tick: number;
   rngState: number;
   completedTrips: number;
-  /** The growth bucket already evaluated, so a load does not re-run growth. */
+  citizenSeed: number;
+  /**
+   * The slow-cadence buckets already evaluated, so a load does not re-run
+   * growth, re-collect a day's tax, or re-tick the supply chain.
+   */
   growthBucket: number;
-  /** Base64 of the remembered per-tile speed ratios (Float32, MAP_SIZE^2). */
+  powerBucket: number;
+  chainBucket: number;
+  fieldBucket: number;
+  migrationBucket: number;
+  settledDay: number;
+  money: SavedEconomy;
+  /** Base64 of the per-tile float fields (Float32, MAP_SIZE^2 each). */
   traffic: string;
-  /** Base64 of the four byte layers, each MAP_SIZE^2 long. */
+  noise: string;
+  landValue: string;
+  /** Base64 of the byte layers, each MAP_SIZE^2 long. */
   terrain: string;
   road: string;
   rail: string;
   zone: string;
+  resource: string;
   buildings: SavedBuilding[];
   citizens: SavedCitizen[];
   lines: SavedLine[];
   trains: SavedTrain[];
+}
+
+interface SavedEconomy {
+  balance: number;
+  debt: number;
+  spent: number;
+  rates: TaxRates;
 }
 
 interface SavedBuilding {
@@ -52,9 +73,14 @@ interface SavedBuilding {
   cap: number;
   occ: number[];
   alive: boolean;
+  raw: number;
+  goods: number;
+  sold: number;
+  starved: number;
 }
 
 interface SavedCitizen {
+  seed: number;
   name: string;
   age: number;
   home: number;
@@ -73,6 +99,9 @@ interface SavedCitizen {
   wait: number;
   lastWait: number;
   train: number;
+  happy: number;
+  unhappy: number;
+  lastTrip: number;
   path?: TileIndex[];
   after?: TileIndex[];
   ride?: RideLeg;
@@ -107,12 +136,27 @@ export function serialize(sim: Simulation): SaveData {
     tick: sim.clock.tick,
     rngState: world.rng.getState(),
     completedTrips: sim.stats.totalCompleted,
+    citizenSeed: world.nextCitizenSeed,
     growthBucket: sim.lastGrowthBucket,
+    powerBucket: sim.lastPowerBucket,
+    chainBucket: sim.lastChainBucket,
+    fieldBucket: sim.lastFieldBucket,
+    migrationBucket: sim.lastMigrationBucket,
+    settledDay: sim.lastSettledDay,
+    money: {
+      balance: sim.economy.balance,
+      debt: sim.economy.debt,
+      spent: sim.economy.spentOnBuilding,
+      rates: { ...sim.economy.rates },
+    },
     traffic: encodeBytes(new Uint8Array(sim.traffic.snapshot().buffer)),
+    noise: encodeBytes(new Uint8Array(sim.noise.snapshot().buffer)),
+    landValue: encodeBytes(new Uint8Array(sim.landValue.snapshot().buffer)),
     terrain: encodeBytes(world.map.terrain),
     road: encodeBytes(world.map.road),
     rail: encodeBytes(world.map.rail),
     zone: encodeBytes(world.map.zone),
+    resource: encodeBytes(world.map.resource),
     buildings: world.buildings.map(saveBuilding),
     citizens: world.citizens.map(saveCitizen),
     lines: world.lines.map(saveLine),
@@ -129,11 +173,16 @@ function saveBuilding(b: Building): SavedBuilding {
     cap: b.capacity,
     occ: b.occupants.slice(),
     alive: b.alive,
+    raw: b.rawStock,
+    goods: b.goodsStock,
+    sold: b.soldToday,
+    starved: b.starvedHours,
   };
 }
 
 function saveCitizen(c: Citizen): SavedCitizen {
   const out: SavedCitizen = {
+    seed: c.seed,
     name: c.name,
     age: c.age,
     home: c.home,
@@ -152,6 +201,9 @@ function saveCitizen(c: Citizen): SavedCitizen {
     wait: c.waitStartTick,
     lastWait: c.lastWaitTicks,
     train: c.boardedTrain,
+    happy: c.happiness,
+    unhappy: c.unhappyHours,
+    lastTrip: c.lastTripTicks,
   };
   if (c.path) out.path = c.path.slice();
   if (c.legAfterRide) out.after = c.legAfterRide.slice();
@@ -202,6 +254,7 @@ export function deserialize(data: SaveData): Simulation {
   decodeBytes(data.road, map.road);
   decodeBytes(data.rail, map.rail);
   decodeBytes(data.zone, map.zone);
+  decodeBytes(data.resource, map.resource);
   map.building.fill(-1);
   world.roads.rebuildAll();
   world.rails.rebuildAll();
@@ -217,6 +270,12 @@ export function deserialize(data: SaveData): Simulation {
       capacity: b.cap,
       occupants: b.occ.slice(),
       alive: b.alive,
+      // Recomputed by the power grid on the first slow tick after loading.
+      powered: false,
+      rawStock: b.raw,
+      goodsStock: b.goods,
+      soldToday: b.sold,
+      starvedHours: b.starved,
     };
     world.buildings.push(building);
     if (building.alive) map.building[building.tile] = id;
@@ -226,6 +285,7 @@ export function deserialize(data: SaveData): Simulation {
   data.citizens.forEach((c, id) => {
     world.citizens.push({
       id,
+      seed: c.seed,
       name: c.name,
       age: c.age,
       home: c.home,
@@ -250,6 +310,10 @@ export function deserialize(data: SaveData): Simulation {
       boardedTrain: c.train,
       waitStartTick: c.wait,
       lastWaitTicks: c.lastWait ?? 0,
+      happiness: c.happy,
+      unhappyHours: c.unhappy,
+      lastTripTicks: c.lastTrip,
+      left: false,
     });
   });
 
@@ -293,19 +357,32 @@ export function deserialize(data: SaveData): Simulation {
   });
 
   world.rng.setState(data.rngState);
+  world.nextCitizenSeed = data.citizenSeed;
   world.revision++;
 
   const sim = new Simulation(world);
   sim.clock.tick = data.tick;
-  sim.lastGrowthBucket = data.growthBucket ?? -1;
+  sim.lastGrowthBucket = data.growthBucket;
+  sim.lastPowerBucket = data.powerBucket;
+  sim.lastChainBucket = data.chainBucket;
+  sim.lastFieldBucket = data.fieldBucket;
+  sim.lastMigrationBucket = data.migrationBucket;
+  sim.lastSettledDay = data.settledDay;
+  sim.economy.restore({
+    balance: data.money.balance,
+    debt: data.money.debt,
+    rates: data.money.rates,
+    spentOnBuilding: data.money.spent,
+  });
   sim.stats.restore(data.completedTrips ?? 0);
   sim.stats.sample(world);
 
-  if (data.traffic) {
-    const bytes = new Uint8Array(MAP_SIZE * MAP_SIZE * 4);
-    decodeFloats(data.traffic, bytes);
-    sim.traffic.restore(new Float32Array(bytes.buffer));
-  }
+  sim.traffic.restore(decodeFloatField(data.traffic));
+  sim.noise.restore(decodeFloatField(data.noise));
+  sim.landValue.restore(decodeFloatField(data.landValue));
+  // Power is not saved: it is a pure function of the city, and the first slow
+  // tick after loading recomputes it before anything can read it.
+  sim.power.update(world);
 
   // Anyone whose routing request was still queued when the save was taken
   // needs it re-issued: the queue itself belongs to the old simulation.
@@ -338,7 +415,13 @@ export function decodeBytes(encoded: string, into: Uint8Array): void {
   decodeFloats(encoded, into);
 }
 
-/** The same decode without the map-size check, for the float layer. */
+function decodeFloatField(encoded: string): Float32Array {
+  const bytes = new Uint8Array(MAP_SIZE * MAP_SIZE * 4);
+  decodeFloats(encoded, bytes);
+  return new Float32Array(bytes.buffer);
+}
+
+/** The same decode without the map-size check, for the float layers. */
 function decodeFloats(encoded: string, into: Uint8Array): void {
   const raw = atob(encoded);
   const n = Math.min(raw.length, into.length);

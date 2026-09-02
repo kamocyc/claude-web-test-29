@@ -12,6 +12,15 @@ import type { RideLeg } from './transitPlanner';
 
 export interface Citizen {
   id: CitizenId;
+  /**
+   * A stable identity, unlike `id`.
+   *
+   * Ids are array indices, and the array is compacted whenever someone leaves
+   * the city -- so anything that must not change under a neighbour's departure
+   * hangs off this instead. Departure times are the reason: derived from the
+   * id, a citizen's whole routine would shift the day somebody else moved out.
+   */
+  seed: number;
   name: string;
   age: number;
 
@@ -76,6 +85,17 @@ export interface Citizen {
   waitStartTick: number;
   /** How long the last boarding actually took, kept for the trip statistics. */
   lastWaitTicks: number;
+
+  // --- Wellbeing -----------------------------------------------------------
+
+  /** 0..100, or -1 before the first evaluation. Smoothed, not instantaneous. */
+  happiness: number;
+  /** Consecutive sim-hours spent below the threshold. Patience before leaving. */
+  unhappyHours: number;
+  /** Duration of the last completed trip, which is what the commute is judged on. */
+  lastTripTicks: number;
+  /** Set when the citizen has left the city; the hourly pass then removes them. */
+  left: boolean;
 }
 
 const FAMILY = [
@@ -93,9 +113,11 @@ export function createCitizen(
   work: BuildingId,
   homeTile: TileIndex,
   rng: Rng,
+  seed = id,
 ): Citizen {
   return {
     id,
+    seed,
     name: `${rng.pick(FAMILY)} ${rng.pick(GIVEN)}`,
     age: 22 + rng.int(43),
     home,
@@ -120,12 +142,16 @@ export function createCitizen(
     boardedTrain: -1,
     waitStartTick: 0,
     lastWaitTicks: 0,
+    happiness: -1,
+    unhappyHours: 0,
+    lastTripTicks: 0,
+    left: false,
   };
 }
 
 /** Stable per-citizen offset in [-1, 1], used to spread the rush hour. */
-export function scheduleJitter(id: CitizenId, salt: number): number {
-  return hashToUnit(id, salt) * 2 - 1;
+export function scheduleJitter(seed: number, salt: number): number {
+  return hashToUnit(seed, salt) * 2 - 1;
 }
 
 export function isTravelling(c: Citizen): boolean {

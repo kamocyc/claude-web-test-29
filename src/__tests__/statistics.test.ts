@@ -5,6 +5,7 @@ import { CitizenState, TravelMode, Zone, type BuildingId } from '../core/types';
 import { Simulation } from '../sim/simulation';
 import { createLine } from '../world/lineBuilder';
 import { World } from '../world/world';
+import { powerTown } from './helpers';
 
 function railTown(): World {
   const w = new World(77);
@@ -29,13 +30,14 @@ function railTown(): World {
   for (const row of [y - 1, y + 5]) {
     for (let x = 6; x <= 16; x++) {
       const tile = idx(x, row);
-      if (w.adjacentRoad(tile) >= 0) w.paintZone(tile, Zone.Residential);
+      if (w.adjacentRoad(tile) >= 0) w.paintZone(tile, Zone.ResidentialLow);
     }
     for (let x = 90; x <= 100; x++) {
       const tile = idx(x, row);
       if (w.adjacentRoad(tile) >= 0) w.paintZone(tile, Zone.Commercial);
     }
   }
+  powerTown(w);
   return w;
 }
 

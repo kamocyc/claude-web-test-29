@@ -5,7 +5,9 @@ import { BuildingType, CitizenState, TravelMode } from '../core/types';
 import type { Citizen } from '../sim/citizen';
 import { departForHomeMinute, departForWorkMinute } from '../sim/schedule';
 import type { Simulation } from '../sim/simulation';
-import type { Building } from '../world/buildings';
+import { industryOf, isHome, specFor, type Building } from '../world/buildings';
+import { Industry } from '../core/types';
+import { ZONE_LABELS } from '../world/zoneRules';
 
 /**
  * The panel the whole game exists for: one citizen, what they are doing, and
@@ -19,7 +21,7 @@ export class Inspector {
   private readonly followBox: HTMLInputElement;
 
   selected: Citizen | null = null;
-  /** A station the player clicked instead of a citizen. */
+  /** A building the player clicked instead of a citizen. */
   selectedStation: Building | null = null;
 
   constructor(root: HTMLElement) {
@@ -62,8 +64,10 @@ export class Inspector {
 
   update(sim: Simulation): void {
     if (this.selectedStation) {
-      this.title.textContent = '駅';
-      this.updateStation(sim, this.selectedStation);
+      const b = this.selectedStation;
+      this.title.textContent = b.type === BuildingType.Station ? '駅' : BUILDING_LABELS[b.type];
+      if (b.type === BuildingType.Station) this.updateStation(sim, b);
+      else this.updateBuilding(sim, b);
       return;
     }
     this.title.textContent = '市民';
@@ -81,10 +85,11 @@ export class Inspector {
     const rows: Array<[string, string]> = [
       ['名前', `${c.name} (${c.age}歳)`],
       ['状態', stateLabel(c)],
+      ['幸福度', c.happiness < 0 ? '—' : `${Math.round(c.happiness)} / 100${moodNote(c)}`],
       ['自宅', home ? address(home.tile) : '—'],
       ['職場', work ? address(work.tile) : '未就業'],
-      ['出勤', formatMinute(departForWorkMinute(c.id))],
-      ['退勤', formatMinute(departForHomeMinute(c.id))],
+      ['出勤', formatMinute(departForWorkMinute(c.seed))],
+      ['退勤', formatMinute(departForHomeMinute(c.seed))],
     ];
 
     if (c.mode === TravelMode.Transit && c.ride) {
@@ -137,6 +142,58 @@ export class Inspector {
     if (c.mode === TravelMode.Car && c.path) {
       this.body.appendChild(speedBar(c.v / CAR_FREE_SPEED));
     }
+
+    // Why this person feels the way they do, in the same terms the city-wide
+    // panel uses, so an unhappy citizen can be traced to a specific failure.
+    if (home && home.alive) {
+      this.body.appendChild(subheading('住環境'));
+      this.body.appendChild(definitionList([
+        ['地価', `${Math.round(sim.landValue.at(home.tile))} / 100`],
+        ['騒音', `${Math.round(sim.noise.at(home.tile))} / 100`],
+        ['電気', home.powered ? '来ている' : '来ていない'],
+        ['買い物', `${Math.round(sim.chain.serviceLevel(world) * 100)}% 供給`],
+      ]));
+    }
+  }
+
+  /**
+   * Any building other than a station: what it employs, what it is powered by
+   * and -- for anything in the supply chain -- what it has to work with. A
+   * factory sitting idle should be able to say so itself.
+   */
+  private updateBuilding(sim: Simulation, b: Building): void {
+    if (!sim.world.isAlive(b)) {
+      this.body.innerHTML = '<p class="empty">この建物は撤去されました。</p>';
+      return;
+    }
+    const spec = specFor(b.type);
+    const rows: Array<[string, string]> = [
+      ['場所', address(b.tile)],
+      [isHome(b.type) ? '居住者' : '従業員', `${b.occupants.length} / ${b.capacity} 人`],
+      ['電気', b.powered ? `来ている（${spec.power}）` : '⚠ 来ていない'],
+      ['地価', `${Math.round(sim.landValue.at(b.tile))} / 100`],
+      ['騒音', `${Math.round(sim.noise.at(b.tile))} / 100`],
+    ];
+
+    const industry = industryOf(b.type);
+    if (industry === Industry.Primary) {
+      rows.push(['採れた資源', `${b.goodsStock.toFixed(0)} / ${spec.storage}`]);
+    } else if (industry === Industry.Secondary) {
+      rows.push(['原材料', `${b.rawStock.toFixed(0)} / ${spec.storage}`]);
+      rows.push(['製品', `${b.goodsStock.toFixed(0)} / ${spec.storage}`]);
+    } else if (industry === Industry.Retail) {
+      rows.push(['在庫', `${b.goodsStock.toFixed(0)} / ${spec.storage}`]);
+      rows.push(['本日の販売', `${b.soldToday.toFixed(0)}`]);
+    }
+    if (b.starvedHours > 0) {
+      rows.push(['稼働できない時間', `${b.starvedHours} 時間`]);
+    }
+    if (spec.upkeep > 0) {
+      rows.push(['維持費', `¥${spec.upkeep.toLocaleString('ja-JP')} / 日`]);
+    }
+
+    this.body.innerHTML = '';
+    this.body.appendChild(definitionList(rows));
   }
 
   /**
@@ -156,6 +213,8 @@ export class Inspector {
       ['場所', address(station.tile)],
       ['待ち人数', `${sim.stats.waitingAt(station.id)} 人`],
       ['乗り入れ路線', lines.length === 0 ? 'なし' : lines.map((l) => l.name).join('、')],
+      ['電気', station.powered ? '来ている' : '⚠ 来ていない'],
+      ['区画', ZONE_LABELS[world.map.getZone(station.tile)]],
     ];
 
     for (const line of lines) {
@@ -175,6 +234,33 @@ export class Inspector {
       this.body.appendChild(hint);
     }
   }
+}
+
+function subheading(text: string): HTMLElement {
+  const h = document.createElement('h3');
+  h.textContent = text;
+  return h;
+}
+
+const BUILDING_LABELS: Record<BuildingType, string> = {
+  [BuildingType.House]: '低密度住宅',
+  [BuildingType.Apartment]: '高密度住宅',
+  [BuildingType.Shop]: '商店',
+  [BuildingType.Factory]: '工場',
+  [BuildingType.Office]: 'オフィス',
+  [BuildingType.Farm]: '水田',
+  [BuildingType.ForestryCamp]: '林業所',
+  [BuildingType.FishingWharf]: '漁港',
+  [BuildingType.Mine]: '鉱山',
+  [BuildingType.Station]: '駅',
+  [BuildingType.PowerPlant]: '発電所',
+};
+
+function moodNote(c: Citizen): string {
+  if (c.happiness >= 70) return '（満足）';
+  if (c.happiness >= 50) return '（まあまあ）';
+  if (c.happiness >= 30) return '（不満）';
+  return `（限界。${c.unhappyHours}時間 我慢中）`;
 }
 
 function definitionList(rows: Array<[string, string]>): HTMLElement {
@@ -225,7 +311,7 @@ function speedBar(ratio: number): HTMLElement {
 }
 
 function buildingLabel(t: BuildingType): string {
-  return t === BuildingType.Residence ? '住宅' : '職場';
+  return BUILDING_LABELS[t];
 }
 
 function address(tile: number): string {

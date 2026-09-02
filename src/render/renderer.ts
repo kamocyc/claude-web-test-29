@@ -16,16 +16,20 @@ import {
   type TileIndex,
 } from '../core/types';
 import { SignalAxis } from '../sim/signals';
+import { Resource } from '../core/types';
 import type { Citizen } from '../sim/citizen';
 import { tileCenterX, tileCenterY } from '../sim/citizen';
 import type { Simulation } from '../sim/simulation';
-import { COLORS, speedColor } from './palette';
+import { COLORS, speedColor, valueColor } from './palette';
 import type { Camera } from './camera';
 import type { Train } from '../world/transit';
 
+/** Which field is painted over the map, if any. */
+export type Overlay = 'none' | 'traffic' | 'power' | 'noise' | 'landValue';
+
 export interface RenderOptions {
   showZones: boolean;
-  showTraffic: boolean;
+  overlay: Overlay;
   hoverTile: TileIndex;
   selected: Citizen | null;
   /** Stations picked so far in the line tool, highlighted while choosing. */
@@ -85,9 +89,12 @@ export class Renderer {
         } else if (map.rail[i] === 1) {
           ctx.fillStyle = COLORS.rail;
         } else {
-          ctx.fillStyle = (x + y) % 2 === 0 ? COLORS.grass : COLORS.grassAlt;
+          ctx.fillStyle = groundColor(map.resource[i] as Resource, x, y);
         }
         ctx.fillRect(p.x, p.y, size, size);
+        if (map.road[i] === 0 && map.rail[i] === 0 && map.building[i] === -1) {
+          this.drawGroundDetail(map.resource[i] as Resource, p.x, p.y, z, i);
+        }
         if (map.rail[i] === 1 && z >= 7) this.drawSleepers(p.x, p.y, z);
         if (map.isCrossing(i)) this.drawCrossing(sim, i, p.x, p.y, z);
 
@@ -102,15 +109,11 @@ export class Renderer {
             }
           }
         } else if (opts.showZones && map.zone[i] !== Zone.None) {
-          ctx.fillStyle = map.zone[i] === Zone.Residential
-            ? COLORS.zoneResidential
-            : COLORS.zoneCommercial;
+          ctx.fillStyle = ZONE_COLORS[map.zone[i] as Zone];
           ctx.fillRect(p.x, p.y, size, size);
         }
 
-        if (opts.showTraffic && map.road[i] === 1) {
-          this.drawTrafficTile(sim, i, p.x, p.y, size);
-        }
+        this.drawOverlayTile(sim, opts.overlay, i, p.x, p.y, size);
       }
     }
   }
@@ -133,22 +136,97 @@ export class Renderer {
     }
   }
 
-  /** Traffic colour is the mean speed ratio of the cars actually on the tile. */
-  private drawTrafficTile(sim: Simulation, tile: TileIndex, px: number, py: number, size: number): void {
-    const occupants = sim.occupancy.at(tile);
-    if (occupants.length === 0) return;
+  /**
+   * A few marks on bare ground so forest, ore and paddy land read as different
+   * places rather than as differently-tinted grass. Only at close zoom: at a
+   * distance the base colour already carries it, and the marks would just be
+   * noise on every tile of the map.
+   */
+  private drawGroundDetail(resource: Resource, px: number, py: number, z: number, tile: number): void {
+    if (z < 8 || resource === Resource.None || resource === Resource.Fertile) return;
+    const ctx = this.ctx;
+    // Deterministic per tile, so the scatter does not crawl as the map pans.
+    const jitter = (salt: number): number => ((tile * 2654435761 + salt * 40503) % 1000) / 1000;
 
-    let sum = 0;
-    for (const o of occupants) {
-      const c = sim.world.citizens[o.id];
-      if (c) sum += c.v / CAR_FREE_SPEED;
+    if (resource === Resource.Forest) {
+      ctx.fillStyle = COLORS.forestTree;
+      for (let n = 0; n < 3; n++) {
+        const r = Math.max(1, z * 0.1);
+        ctx.beginPath();
+        ctx.arc(px + z * (0.2 + jitter(n) * 0.6), py + z * (0.2 + jitter(n + 7) * 0.6), r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      return;
     }
-    const ratio = sum / occupants.length;
+    ctx.fillStyle = COLORS.oreSpeck;
+    for (let n = 0; n < 3; n++) {
+      const s = Math.max(1, z * 0.12);
+      ctx.fillRect(px + z * (0.2 + jitter(n) * 0.6), py + z * (0.2 + jitter(n + 3) * 0.6), s, s);
+    }
+  }
 
-    this.ctx.globalAlpha = 0.35;
-    this.ctx.fillStyle = speedColor(ratio);
-    this.ctx.fillRect(px, py, size, size);
-    this.ctx.globalAlpha = 1;
+  /**
+   * The data overlays, all painted the same way: one translucent wash per
+   * tile, so the map underneath stays readable and two overlays can never be
+   * confused for the map itself.
+   */
+  private drawOverlayTile(
+    sim: Simulation,
+    overlay: Overlay,
+    tile: TileIndex,
+    px: number,
+    py: number,
+    size: number,
+  ): void {
+    const ctx = this.ctx;
+    switch (overlay) {
+      case 'none':
+        return;
+      case 'traffic': {
+        if (!sim.world.map.isRoad(tile)) return;
+        const occupants = sim.occupancy.at(tile);
+        if (occupants.length === 0) return;
+        let sum = 0;
+        for (const o of occupants) {
+          const c = sim.world.citizens[o.id];
+          if (c) sum += c.v / CAR_FREE_SPEED;
+        }
+        ctx.globalAlpha = 0.35;
+        ctx.fillStyle = speedColor(sum / occupants.length);
+        break;
+      }
+      case 'power': {
+        // Roads carry the cables, so the overlay colours the network itself
+        // and marks the buildings hanging off it that are still dark.
+        const bid = sim.world.map.building[tile];
+        if (bid >= 0) {
+          const b = sim.world.buildings[bid];
+          if (!b || !b.alive) return;
+          ctx.globalAlpha = 0.5;
+          ctx.fillStyle = b.powered ? COLORS.powered : COLORS.unpowered;
+          break;
+        }
+        if (!sim.world.map.isRoad(tile)) return;
+        ctx.globalAlpha = sim.power.gridAt(tile) >= 0 ? 0.25 : 0;
+        ctx.fillStyle = COLORS.powered;
+        break;
+      }
+      case 'noise': {
+        const level = sim.noise.at(tile);
+        if (level < 1) return;
+        ctx.globalAlpha = Math.min(0.55, level / 90);
+        ctx.fillStyle = COLORS.noise;
+        break;
+      }
+      case 'landValue': {
+        const value = sim.landValue.at(tile);
+        ctx.globalAlpha = 0.4;
+        ctx.fillStyle = valueColor(value / 100);
+        break;
+      }
+    }
+    ctx.fillRect(px, py, size, size);
+    ctx.globalAlpha = 1;
   }
 
   /**
@@ -523,8 +601,42 @@ function trainHeading(train: Train): number {
   return Math.atan2(dy, dx);
 }
 
+function groundColor(resource: Resource, x: number, y: number): string {
+  switch (resource) {
+    case Resource.Forest:
+      return COLORS.forestGround;
+    case Resource.Ore:
+      return COLORS.oreGround;
+    case Resource.Fertile:
+      return COLORS.fertileGround;
+    case Resource.None:
+      return (x + y) % 2 === 0 ? COLORS.grass : COLORS.grassAlt;
+  }
+}
+
+const ZONE_COLORS: Record<Zone, string> = {
+  [Zone.None]: 'transparent',
+  [Zone.ResidentialLow]: COLORS.zoneResidentialLow,
+  [Zone.ResidentialHigh]: COLORS.zoneResidentialHigh,
+  [Zone.Commercial]: COLORS.zoneCommercial,
+  [Zone.Industrial]: COLORS.zoneIndustrial,
+  [Zone.Office]: COLORS.zoneOffice,
+  [Zone.Farm]: COLORS.zoneFarm,
+  [Zone.Forestry]: COLORS.zoneForestry,
+  [Zone.Fishery]: COLORS.zoneFishery,
+  [Zone.Mining]: COLORS.zoneMining,
+};
+
 const BUILDING_COLORS: Record<BuildingType, string> = {
-  [BuildingType.Residence]: COLORS.residence,
-  [BuildingType.Commerce]: COLORS.commerce,
+  [BuildingType.House]: COLORS.residence,
+  [BuildingType.Apartment]: COLORS.apartment,
+  [BuildingType.Shop]: COLORS.commerce,
+  [BuildingType.Factory]: COLORS.industry,
+  [BuildingType.Office]: COLORS.office,
+  [BuildingType.Farm]: COLORS.farm,
+  [BuildingType.ForestryCamp]: COLORS.forestry,
+  [BuildingType.FishingWharf]: COLORS.fishery,
+  [BuildingType.Mine]: COLORS.mining,
   [BuildingType.Station]: COLORS.station,
+  [BuildingType.PowerPlant]: COLORS.power,
 };
