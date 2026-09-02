@@ -8,6 +8,7 @@ import {
   type TileIndex,
   type TrainId,
 } from '../core/types';
+import { CAR_PROFILE, type FollowingProfile } from './carFollowing';
 import type { RideLeg } from './transitPlanner';
 
 export interface Citizen {
@@ -29,6 +30,13 @@ export interface Citizen {
 
   state: CitizenState;
   mode: TravelMode;
+  /**
+   * How this citizen behaves when driving. Always the car profile -- walking
+   * is handled by the mode, not by a second profile -- but it is a field
+   * rather than a constant because that is what makes a citizen a `RoadAgent`
+   * and lets lorries share the same movement code.
+   */
+  profile: FollowingProfile;
 
   /**
    * Full door-to-door route: [homeTile, accessRoad, ...roads, accessRoad, workTile].
@@ -124,6 +132,7 @@ export function createCitizen(
     work,
     state: CitizenState.AtHome,
     mode: TravelMode.Walk,
+    profile: CAR_PROFILE,
     path: null,
     destination: home,
     s: 0,

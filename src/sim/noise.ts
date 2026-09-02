@@ -33,7 +33,9 @@ export class NoiseField {
   /** Cheap per-tick tally, so the expensive part can run rarely. */
   sample(occupancy: Occupancy): void {
     for (const tile of occupancy.dirtyTiles) {
-      this.traffic[tile] += occupancy.at(tile).length;
+      // Road space, not vehicle count: a lorry is louder than a hatchback,
+      // and it is the same number that decides how much room it takes up.
+      this.traffic[tile] += occupancy.loadAt(tile);
     }
     this.samples++;
   }

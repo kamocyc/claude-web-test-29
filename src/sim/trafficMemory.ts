@@ -30,20 +30,14 @@ export class TrafficMemory {
   /** Tiles currently below free flow, so recovery need not scan the map. */
   private tracked: TileIndex[] = [];
 
-  update(world: World, occupancy: Occupancy): void {
+  update(_world: World, occupancy: Occupancy): void {
     const seen = new Set<TileIndex>();
 
     for (const tile of occupancy.dirtyTiles) {
-      const cars = occupancy.at(tile);
-      if (cars.length === 0) continue;
+      const mean = occupancy.meanSpeedRatio(tile);
+      if (mean < 0) continue;
 
-      let sum = 0;
-      for (const car of cars) {
-        const c = world.citizens[car.id];
-        if (c) sum += c.v / CAR_FREE_SPEED;
-      }
-      const observed = Math.max(MIN_RATIO, sum / cars.length);
-      this.blend(tile, observed, SMOOTHING);
+      this.blend(tile, Math.max(MIN_RATIO, mean), SMOOTHING);
       seen.add(tile);
     }
 

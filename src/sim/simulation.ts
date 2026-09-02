@@ -11,11 +11,11 @@ import {
 } from '../config';
 import { Clock, minutesToTicks } from '../core/clock';
 import { manhattan } from '../core/grid';
-import { CitizenState, TravelMode, type BuildingId } from '../core/types';
+import { CitizenState, isAtRest, TravelMode, type BuildingId } from '../core/types';
 import { growCity } from '../world/zoning';
 import type { World } from '../world/world';
 import { tileCenterX, tileCenterY, type Citizen } from './citizen';
-import { advanceCitizen, pathIsBroken, registerOccupancy, setPositionFromPath } from './movement';
+import { advanceVehicle, pathIsBroken, registerVehicle, setPositionFromPath } from './movement';
 import { Crossings } from './crossings';
 import { Occupancy } from './occupancy';
 import { Signals } from './signals';
@@ -241,7 +241,11 @@ export class Simulation {
   // --- Movement ------------------------------------------------------------
 
   private moveCitizens(): void {
-    registerOccupancy(this.world, this.occupancy);
+    this.occupancy.clear();
+    for (const c of this.world.citizens) {
+      if (isAtRest(c.state)) continue;
+      registerVehicle(this.world, this.occupancy, c);
+    }
 
     let stranded = 0;
     for (const c of this.world.citizens) {
@@ -264,7 +268,7 @@ export class Simulation {
       }
 
       if (
-        advanceCitizen(
+        advanceVehicle(
           this.world,
           c,
           this.occupancy,

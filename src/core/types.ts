@@ -75,15 +75,40 @@ export const enum CitizenState {
   Waiting = 5,
   /** Aboard a train. Position is the train's position. */
   Riding = 6,
+  /** On the way to buy the household's groceries. */
+  ToShop = 7,
+  /** In the shop, filling the basket. */
+  AtShop = 8,
+}
+
+/**
+ * True while the citizen is somewhere they stay put: at home, at their desk,
+ * or standing in a shop.
+ *
+ * Every "is this person out?" test in the codebase used to enumerate the
+ * states it did not want, so each new state meant hunting through the
+ * renderer, the statistics, the inspector and the selection code. These two
+ * predicates are the single place that knowledge lives now.
+ */
+export function isAtRest(state: CitizenState): boolean {
+  return (
+    state === CitizenState.AtHome ||
+    state === CitizenState.AtWork ||
+    state === CitizenState.AtShop
+  );
 }
 
 /** True while the citizen is out of the house on a trip, in any form. */
 export function isEnRoute(state: CitizenState): boolean {
+  return !isAtRest(state) && state !== CitizenState.Stranded;
+}
+
+/** True while the citizen is moving under their own steam along a path. */
+export function isOnFoot(state: CitizenState): boolean {
   return (
     state === CitizenState.ToWork ||
     state === CitizenState.ToHome ||
-    state === CitizenState.Waiting ||
-    state === CitizenState.Riding
+    state === CitizenState.ToShop
   );
 }
 

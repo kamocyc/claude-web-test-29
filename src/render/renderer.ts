@@ -10,6 +10,7 @@ import { idx } from '../core/grid';
 import {
   BuildingType,
   CitizenState,
+  isAtRest,
   Terrain,
   TravelMode,
   Zone,
@@ -184,15 +185,10 @@ export class Renderer {
         return;
       case 'traffic': {
         if (!sim.world.map.isRoad(tile)) return;
-        const occupants = sim.occupancy.at(tile);
-        if (occupants.length === 0) return;
-        let sum = 0;
-        for (const o of occupants) {
-          const c = sim.world.citizens[o.id];
-          if (c) sum += c.v / CAR_FREE_SPEED;
-        }
+        const mean = sim.occupancy.meanSpeedRatio(tile);
+        if (mean < 0) return;
         ctx.globalAlpha = 0.35;
-        ctx.fillStyle = speedColor(sum / occupants.length);
+        ctx.fillStyle = speedColor(mean);
         break;
       }
       case 'power': {
@@ -249,7 +245,7 @@ export class Renderer {
 
     for (let i = 0; i < sim.world.citizens.length; i += stride) {
       const c = sim.world.citizens[i];
-      if (c.state === CitizenState.AtHome || c.state === CitizenState.AtWork) continue;
+      if (isAtRest(c.state)) continue;
       // Riders are inside the train, which is drawn separately; their dots
       // would just pile up on top of it.
       if (c.state === CitizenState.Riding) continue;

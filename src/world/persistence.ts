@@ -1,6 +1,7 @@
 import { MAP_SIZE } from '../config';
 import type { CitizenState, TravelMode, BuildingType, TileIndex } from '../core/types';
 import type { Citizen } from '../sim/citizen';
+import { CAR_PROFILE } from '../sim/carFollowing';
 import type { TaxRates } from '../sim/economy';
 import { Simulation } from '../sim/simulation';
 import { setTrainPosition } from '../sim/trains';
@@ -292,6 +293,7 @@ export function deserialize(data: SaveData): Simulation {
       work: c.work,
       state: c.state as CitizenState,
       mode: c.mode as TravelMode,
+      profile: CAR_PROFILE,
       path: c.path ?? null,
       destination: c.dest,
       s: c.s,

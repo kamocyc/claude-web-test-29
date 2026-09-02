@@ -1,61 +1,64 @@
 import {
-  CAR_DECEL_MAX,
-  CAR_FREE_SPEED,
   GRIDLOCK_RELEASE_TICKS,
   TILE_CAR_CAPACITY,
   WALK_SPEED,
 } from '../config';
 import { directionBetween } from '../core/grid';
-import { CitizenState, TravelMode, type Direction, type TileIndex } from '../core/types';
+import { TravelMode, type Direction, type TileIndex } from '../core/types';
 import type { World } from '../world/world';
 import { brakingSpeed, desiredSpeed, stepSpeed } from './carFollowing';
-import { tileCenterX, tileCenterY, type Citizen } from './citizen';
+import { tileCenterX, tileCenterY } from './citizen';
 import type { Crossings } from './crossings';
 import type { Occupancy } from './occupancy';
 import type { Signals } from './signals';
+import { occupantSize, type RoadAgent } from './vehicle';
 
-/** Index of the last road tile on the route; beyond it the citizen walks. */
+/** Index of the last road tile on the route; beyond it the agent walks. */
 function driveEndIndex(path: TileIndex[]): number {
   return path.length - 2;
 }
 
-function segmentOf(c: Citizen): number {
+function segmentOf(c: RoadAgent): number {
   const path = c.path!;
   return Math.min(path.length - 2, Math.floor(c.s));
 }
 
-export function isDrivingSegment(world: World, c: Citizen, seg: number): boolean {
+export function isDrivingSegment(world: World, c: RoadAgent, seg: number): boolean {
   if (c.mode !== TravelMode.Car) return false;
   const path = c.path!;
   return world.map.isRoad(path[seg]) && world.map.isRoad(path[seg + 1]);
 }
 
-export function headingOf(c: Citizen, seg: number): Direction | -1 {
+export function headingOf(c: RoadAgent, seg: number): Direction | -1 {
   const path = c.path!;
   return directionBetween(path[seg], path[seg + 1]);
 }
 
 /**
- * Phase one of the tick: publish where every car is. Split from the update so
- * that each car sees the same snapshot, making the result independent of the
- * order citizens happen to sit in the array.
+ * Phase one of the tick: publish where every vehicle is. Split from the update
+ * so that each vehicle sees the same snapshot, making the result independent
+ * of the order agents happen to sit in their arrays -- which is what lets
+ * lorries and cars share the road without either one going first.
  */
-export function registerOccupancy(world: World, occ: Occupancy): void {
-  occ.clear();
-  for (const c of world.citizens) {
-    if (!c.path || c.state === CitizenState.AtHome || c.state === CitizenState.AtWork) continue;
-    const seg = segmentOf(c);
-    if (!isDrivingSegment(world, c, seg)) continue;
-    const dir = headingOf(c, seg);
-    if (dir === -1) continue;
-    occ.add(c.path[seg], { id: c.id, dir, progress: c.s - seg });
-  }
+export function registerVehicle(world: World, occ: Occupancy, c: RoadAgent): void {
+  if (!c.path) return;
+  const seg = segmentOf(c);
+  if (!isDrivingSegment(world, c, seg)) return;
+  const dir = headingOf(c, seg);
+  if (dir === -1) return;
+  occ.add(c.path[seg], {
+    id: c.id,
+    dir,
+    progress: c.s - seg,
+    speedRatio: c.v / c.profile.freeSpeed,
+    size: occupantSize(c.profile),
+  });
 }
 
-/** Phase two: advance one citizen by a tick. Returns true when it arrived. */
-export function advanceCitizen(
+/** Phase two: advance one vehicle by a tick. Returns true when it arrived. */
+export function advanceVehicle(
   world: World,
-  c: Citizen,
+  c: RoadAgent,
   occ: Occupancy,
   crossings: Crossings,
   signals: Signals,
@@ -74,7 +77,8 @@ export function advanceCitizen(
     const gap = gapToLeader(world, c, occ, seg, local, dir, released);
     const stopDistance = distanceToStop(world, c, occ, crossings, signals, tick, seg, dir);
 
-    c.v = stepSpeed(c.v, desiredSpeed(CAR_FREE_SPEED, gap, stopDistance), CAR_FREE_SPEED);
+    const free = c.profile.freeSpeed;
+    c.v = stepSpeed(c.v, desiredSpeed(free, gap, stopDistance, c.profile), free, c.profile);
     c.blockedTicks = c.v < 1e-4 ? c.blockedTicks + 1 : 0;
   } else {
     c.v = WALK_SPEED;
@@ -97,7 +101,7 @@ export function advanceCitizen(
 
 function gapToLeader(
   world: World,
-  c: Citizen,
+  c: RoadAgent,
   occ: Occupancy,
   seg: number,
   local: number,
@@ -121,7 +125,7 @@ function gapToLeader(
 
 function distanceToStop(
   world: World,
-  c: Citizen,
+  c: RoadAgent,
   occ: Occupancy,
   crossings: Crossings,
   signals: Signals,
@@ -170,7 +174,7 @@ function distanceToStop(
  * once a car is easing up to the line at a crawl.
  */
 function holdsAtSignal(
-  c: Citizen,
+  c: RoadAgent,
   signals: Signals,
   tile: TileIndex,
   dir: Direction,
@@ -184,7 +188,7 @@ function holdsAtSignal(
     return false;
   }
   if (c.signalHold === tile) return true;
-  if (!canStopWithin(c.v, toStopLine)) return false;
+  if (!canStopWithin(c.v, toStopLine, c.profile.decelMax)) return false;
 
   c.signalHold = tile;
   return true;
@@ -195,11 +199,11 @@ function holdsAtSignal(
  * emergency braking. Uses the same integration-aware formula the car-following
  * model does, so the answer agrees with what the car will actually manage.
  */
-function canStopWithin(v: number, distance: number): boolean {
-  return v <= brakingSpeed(Math.max(0, distance), CAR_DECEL_MAX);
+function canStopWithin(v: number, distance: number, decelMax: number): boolean {
+  return v <= brakingSpeed(Math.max(0, distance), decelMax);
 }
 
-export function setPositionFromPath(c: Citizen): void {
+export function setPositionFromPath(c: RoadAgent): void {
   const path = c.path!;
   const seg = Math.min(path.length - 2, Math.floor(c.s));
   const t = c.s - seg;
@@ -212,7 +216,7 @@ export function setPositionFromPath(c: Citizen): void {
 }
 
 /** True when the route no longer exists, e.g. the player bulldozed it. */
-export function pathIsBroken(world: World, c: Citizen): boolean {
+export function pathIsBroken(world: World, c: RoadAgent): boolean {
   const path = c.path;
   if (!path) return true;
   const seg = segmentOf(c);

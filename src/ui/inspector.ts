@@ -289,6 +289,10 @@ function stateLabel(c: Citizen): string {
       return '駅で電車を待っている';
     case CitizenState.Riding:
       return '乗車中';
+    case CitizenState.ToShop:
+      return '買い物へ向かっている';
+    case CitizenState.AtShop:
+      return '買い物中';
     case CitizenState.Stranded:
       return '⚠ 経路なし（道路が繋がっていません）';
   }

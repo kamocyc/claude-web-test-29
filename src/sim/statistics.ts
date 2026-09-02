@@ -1,6 +1,6 @@
 import { TRIP_HISTORY_SIZE } from '../config';
 import { ticksToMinutes } from '../core/clock';
-import { CitizenState, TravelMode, type BuildingId } from '../core/types';
+import { CitizenState, isEnRoute, TravelMode, type BuildingId } from '../core/types';
 import type { World } from '../world/world';
 import type { Citizen } from './citizen';
 
@@ -109,8 +109,7 @@ export class Statistics {
           break;
       }
 
-      if (c.state === CitizenState.ToWork || c.state === CitizenState.ToHome
-        || c.state === CitizenState.Waiting || c.state === CitizenState.Riding) {
+      if (isEnRoute(c.state)) {
         if (c.mode === TravelMode.Car) s.driving++;
         else if (c.mode === TravelMode.Transit) s.usingTransit++;
         else s.walking++;

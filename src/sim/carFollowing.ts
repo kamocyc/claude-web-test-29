@@ -2,8 +2,15 @@ import {
   CAR_ACCEL,
   CAR_DECEL_COMFORT,
   CAR_DECEL_MAX,
+  CAR_FREE_SPEED,
   CAR_LENGTH,
   CAR_MIN_GAP,
+  LORRY_ACCEL,
+  LORRY_DECEL_COMFORT,
+  LORRY_DECEL_MAX,
+  LORRY_FREE_SPEED,
+  LORRY_LENGTH,
+  LORRY_MIN_GAP,
   TRAIN_ACCEL,
   TRAIN_DECEL_COMFORT,
   TRAIN_FREE_SPEED,
@@ -26,12 +33,30 @@ export interface FollowingProfile {
 }
 
 export const CAR_PROFILE: FollowingProfile = {
-  freeSpeed: 0,
+  freeSpeed: CAR_FREE_SPEED,
   accel: CAR_ACCEL,
   decelComfort: CAR_DECEL_COMFORT,
   decelMax: CAR_DECEL_MAX,
   length: CAR_LENGTH,
   minGap: CAR_MIN_GAP,
+};
+
+/**
+ * A lorry: slower away from the lights, longer, and lower-geared than a car.
+ *
+ * The numbers are not there for realism so much as for consequence. A lorry
+ * that took up the same road space as a car would be invisible in a queue,
+ * and freight that moved at car speed would make distance almost free -- and
+ * the whole point of putting goods on the road is that where the industry
+ * sits should cost something.
+ */
+export const LORRY_PROFILE: FollowingProfile = {
+  freeSpeed: LORRY_FREE_SPEED,
+  accel: LORRY_ACCEL,
+  decelComfort: LORRY_DECEL_COMFORT,
+  decelMax: LORRY_DECEL_MAX,
+  length: LORRY_LENGTH,
+  minGap: LORRY_MIN_GAP,
 };
 
 export const TRAIN_PROFILE: FollowingProfile = {

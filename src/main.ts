@@ -1,7 +1,7 @@
 import { idx, manhattan, tileX, tileY } from './core/grid';
 import {
   BuildingType,
-  CitizenState,
+  isAtRest,
   Resource,
   Zone,
   type BuildingId,
@@ -209,7 +209,7 @@ function selectNearestCitizen(wx: number, wy: number): void {
   let bestDist = radius * radius;
 
   for (const c of sim.world.citizens) {
-    if (c.state === CitizenState.AtHome || c.state === CitizenState.AtWork) continue;
+    if (isAtRest(c.state)) continue;
     const dx = c.x - wx;
     const dy = c.y - wy;
     const d = dx * dx + dy * dy;
@@ -223,7 +223,7 @@ function selectNearestCitizen(wx: number, wy: number): void {
 
 function pickRandomCitizen(): void {
   const travelling = sim.world.citizens.filter(
-    (c) => c.state !== CitizenState.AtHome && c.state !== CitizenState.AtWork,
+    (c) => !isAtRest(c.state),
   );
   const pool = travelling.length > 0 ? travelling : sim.world.citizens;
   if (pool.length === 0) return;

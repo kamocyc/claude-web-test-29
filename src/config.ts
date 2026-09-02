@@ -82,6 +82,20 @@ export const GRIDLOCK_RELEASE_TICKS = 60;
 /** Trips shorter than this are walked instead of driven. */
 export const WALK_DISTANCE_THRESHOLD = 12;
 
+// --- Lorries ---------------------------------------------------------------
+// A lorry is a car with worse numbers, and each one is chosen for the effect
+// it has on the city rather than on any real vehicle. Slower and lower-geared
+// so distance costs the supply chain something; longer so a queue of them is
+// visibly a queue of lorries; a gentler emergency stop for the same reason a
+// train has one -- a laden lorry does not stop like a hatchback.
+
+export const LORRY_FREE_SPEED = 0.09;
+export const LORRY_ACCEL = 0.003;
+export const LORRY_DECEL_COMFORT = 0.006;
+export const LORRY_DECEL_MAX = 0.014;
+export const LORRY_LENGTH = 0.6;
+export const LORRY_MIN_GAP = 0.2;
+
 // --- Rail ------------------------------------------------------------------
 // Whether a line is worth building comes out of one inequality. The ride saves
 // D * (1/CAR - 1/TRAIN) ticks over driving, and costs the walk to and from the
