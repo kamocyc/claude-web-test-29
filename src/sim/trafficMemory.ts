@@ -1,7 +1,6 @@
 import { CAR_FREE_SPEED, MAP_SIZE } from '../config';
 import type { TileIndex } from '../core/types';
 import type { Occupancy } from './occupancy';
-import type { World } from '../world/world';
 
 /** How fast the remembered speed follows what is happening now. */
 const SMOOTHING = 0.01;
@@ -30,7 +29,7 @@ export class TrafficMemory {
   /** Tiles currently below free flow, so recovery need not scan the map. */
   private tracked: TileIndex[] = [];
 
-  update(_world: World, occupancy: Occupancy): void {
+  update(occupancy: Occupancy): void {
     const seen = new Set<TileIndex>();
 
     for (const tile of occupancy.dirtyTiles) {

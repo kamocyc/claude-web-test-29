@@ -83,18 +83,29 @@ export const GRIDLOCK_RELEASE_TICKS = 60;
 export const WALK_DISTANCE_THRESHOLD = 12;
 
 // --- Lorries ---------------------------------------------------------------
-// A lorry is a car with worse numbers, and each one is chosen for the effect
-// it has on the city rather than on any real vehicle. Slower and lower-geared
-// so distance costs the supply chain something; longer so a queue of them is
-// visibly a queue of lorries; a gentler emergency stop for the same reason a
-// train has one -- a laden lorry does not stop like a hatchback.
+// A lorry is a car with worse numbers -- but not *all* worse, and which ones
+// took some measuring.
+//
+// It runs at the same free speed as a car. That is not laziness: there is one
+// lane per direction and no overtaking in this model, so a lorry that cruises
+// at 70% of car speed is not a nuisance, it is a permanent rolling roadblock.
+// Thirty-six of them were enough to gridlock a city of a thousand that ran
+// perfectly well without them -- at midnight, seven hundred people were still
+// sitting in queues that had formed behind a lorry earlier in the day.
+//
+// What a lorry costs the city instead is space and time: it is half again as
+// long, so it fills a junction faster and leaves a bigger gap in front of it,
+// and it is slow to pull away and slow to stop. Distance still costs the
+// supply chain, because the fleet is capped -- a supplier twice as far away
+// consumes twice the lorry-hours to serve, and those hours come out of
+// somebody else's delivery.
 
-export const LORRY_FREE_SPEED = 0.09;
+export const LORRY_FREE_SPEED = CAR_FREE_SPEED;
 export const LORRY_ACCEL = 0.003;
 export const LORRY_DECEL_COMFORT = 0.006;
 export const LORRY_DECEL_MAX = 0.014;
-export const LORRY_LENGTH = 0.6;
-export const LORRY_MIN_GAP = 0.2;
+export const LORRY_LENGTH = 0.45;
+export const LORRY_MIN_GAP = 0.15;
 
 // --- Rail ------------------------------------------------------------------
 // Whether a line is worth building comes out of one inequality. The ride saves
@@ -173,6 +184,22 @@ export const JOB_SURPLUS_RATIO = 0.15;
 /** Land value a tile needs before anyone will build a block of flats on it. */
 export const HIGH_DENSITY_LAND_VALUE = 55;
 
+/**
+ * How much more the chain can make than the city consumes before growth stops
+ * extending it. A margin, not a multiplier: at 1.25 a city keeps a quarter
+ * more capacity than it needs, which absorbs a bad delivery day without
+ * building an industry four times too big for its lorries to serve.
+ */
+export const CHAIN_HEADROOM = 1.25;
+
+/**
+ * People one shop serves. Six staff for thirty residents is generous, and the
+ * number that matters is the other side of it: every shop is a shelf the
+ * lorries have to keep filled, so a city with three times the shops it needs
+ * spends its whole fleet topping them up.
+ */
+export const RESIDENTS_PER_SHOP = 30;
+
 /** Sim-hours a business survives with nothing to work with before closing. */
 export const ABANDON_AFTER_HOURS = 72;
 
@@ -228,14 +255,82 @@ export const POWER_PLANT_OUTPUT = 600;
 /** The grid is re-solved on this cadence; it only changes when the city does. */
 export const POWER_INTERVAL_MINUTES = 30;
 
-// --- Supply chain ----------------------------------------------------------
+// --- Freight ---------------------------------------------------------------
+// Goods move on lorries, and a lorry is a road vehicle like any other: it
+// queues, it waits at red lights, it holds up the traffic behind it. These
+// numbers are chosen for what that does to the city rather than for realism.
+//
+// One lorry's throughput is its load divided by its round trip. Over the
+// 25-tile haul of a compact city that is 2 x 25 x 11.1 ticks of driving plus
+// two dwells -- about 635 ticks, so 15 round trips a day, 180 units. A city of
+// N people consumes N units a day and needs N of raw behind them, so 2N units
+// of freight: about 6 lorries at 500 people and 22 at the 2000 cap. Visible on
+// the roads, and nowhere near the cost of the citizens themselves.
 
 /**
- * How far goods will travel between two buildings on the same road network.
- * Beyond this the chain simply does not connect, which is what makes an
- * industrial estate on the far edge of the map a mistake rather than a detail.
+ * Units one lorry carries: five sim-hours of a factory's output, and half a
+ * shop's shelf. Bigger loads mean fewer vehicles for the same goods, which is
+ * the cheapest way to keep freight legible on the roads.
  */
-export const SUPPLY_RANGE_TILES = 90;
+export const LORRY_CAPACITY = 20;
+
+/** Ticks spent at each dock loading or unloading. About 6 sim minutes. */
+export const LORRY_DWELL_TICKS = 40;
+
+/** Concurrent lorries one supplier can run. Two is one spare over its output. */
+export const LORRIES_PER_BUILDING = 2;
+
+/**
+ * Fleet ceiling.
+ *
+ * A city of 2000 moves 4000 units a day (its own consumption, plus the raw
+ * behind it) in 12-unit loads over a 25-tile haul: about 330 round trips, and
+ * a lorry manages 15 a day. Fifteen lorries, then, and this is twice that.
+ *
+ * The cap has to be tight, because the failure it prevents is a feedback
+ * loop rather than a memory bill: slow deliveries look like unmet demand,
+ * unmet demand puts more lorries on the road, and more lorries make the
+ * deliveries slower. Left at 120 the fleet gridlocked itself and the chain
+ * starved with a hundred lorries standing in a queue.
+ */
+export const MAX_LORRIES = 28;
+
+/**
+ * Four dispatch rounds an hour, a handful of orders each. The throttle
+ * matters as much as the cap: filling every shop's shelves at once is a
+ * one-off spike far larger than the daily flow, and without a limit the fleet
+ * would size itself to the spike.
+ */
+export const FREIGHT_INTERVAL_MINUTES = 15;
+export const FREIGHT_DISPATCHES_PER_ROUND = 12;
+
+/** Nearest suppliers considered per order, before the road route is checked. */
+export const FREIGHT_SUPPLIER_CANDIDATES = 8;
+
+/** Stock a consumer is topped up to, leaving room for what is already coming. */
+export const FREIGHT_TARGET_FILL = 0.6;
+
+/** A part-laden lorry is not worth the lane it occupies. */
+export const FREIGHT_MIN_LOAD = 5;
+
+/**
+ * How far a supplier can be, measured in ticks of driving rather than tiles.
+ *
+ * This replaces the old SUPPLY_RANGE_TILES. Distance in tiles could never
+ * express the thing that actually matters -- a jammed arterial shortens the
+ * catchment of every factory behind it, and a quiet ring road lengthens it.
+ * A supplier a lorry cannot reach and return from within a working day is not
+ * a supplier.
+ */
+export const MAX_DELIVERY_TICKS = 1400;
+
+/** How long a lorry with no route waits before trying again. */
+export const FREIGHT_RETRY_TICKS = 300;
+
+/** After this long with nowhere to go, a laden lorry gives up and goes home. */
+export const FREIGHT_ABANDON_TICKS = 2400;
+
+// --- Supply chain ----------------------------------------------------------
 
 /**
  * Units a resident buys per day. This one number sets the size of the whole
@@ -278,6 +373,36 @@ export const TAX_RATE_LIMITS: readonly [number, number] = [0, 0.3];
 
 /** The books are closed once a sim day, at midnight. */
 export const TAX_DAY_MINUTE = 0;
+
+// --- Shopping --------------------------------------------------------------
+// The last leg of the supply chain is a trip like any other: somebody walks or
+// drives to a shop, buys, and comes home. These numbers decide how much
+// traffic that is worth. A basket of three days means shopping adds about a
+// sixth of the trips commuting does -- enough to see on the roads and in the
+// tax take, not enough to double the cost of the whole simulation.
+
+/** Days of groceries one trip brings home. */
+export const SHOPPING_BASKET = 3;
+
+/** New arrivals turn up with a cupboard half full, so nobody shops on day one. */
+export const STARTING_PANTRY = 1.5;
+
+/** Go with a day still in hand rather than when bare: it leaves room to fail. */
+export const SHOPPING_TRIGGER = 1.0;
+
+/** Only head for a shop holding this many baskets, so shoppers spread out. */
+export const SHOP_HEADROOM = 3;
+
+/** Shops are worth walking to; beyond this the trip is not worth making. */
+export const SHOP_SEARCH_RADIUS = 40;
+export const SHOP_CANDIDATES = 6;
+
+/** Early evening, spread wider than the commute: shopping has no start time. */
+export const SHOPPING_MINUTE = 18 * 60 + 30;
+export const SHOPPING_JITTER_MINUTES = 150;
+
+/** Time spent in the shop. About 9 sim minutes. */
+export const SHOPPING_DWELL_TICKS = 60;
 
 // --- Noise, land value, happiness -------------------------------------------
 

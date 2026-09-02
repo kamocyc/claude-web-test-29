@@ -103,13 +103,31 @@ export function isEnRoute(state: CitizenState): boolean {
   return !isAtRest(state) && state !== CitizenState.Stranded;
 }
 
-/** True while the citizen is moving under their own steam along a path. */
-export function isOnFoot(state: CitizenState): boolean {
+/** True while the citizen is following a path of their own. */
+export function isTravelling(state: CitizenState): boolean {
   return (
     state === CitizenState.ToWork ||
     state === CitizenState.ToHome ||
     state === CitizenState.ToShop
   );
+}
+
+/**
+ * Where a leg ends. Journeys are named by where they are going, and arriving
+ * turns that into where the citizen now is -- so the arrival handler does not
+ * have to work it out by comparing the destination against the citizen's home
+ * and workplace, which stops being a complete question the moment there is
+ * somewhere else to go.
+ */
+export function arrivalStateFor(leg: CitizenState): CitizenState {
+  switch (leg) {
+    case CitizenState.ToWork:
+      return CitizenState.AtWork;
+    case CitizenState.ToShop:
+      return CitizenState.AtShop;
+    default:
+      return CitizenState.AtHome;
+  }
 }
 
 export const enum TravelMode {

@@ -1,8 +1,6 @@
-import { GOODS_PER_RESIDENT_PER_DAY, SUPPLY_RANGE_TILES } from '../config';
-import { manhattan } from '../core/grid';
+import { GOODS_PER_RESIDENT_PER_DAY } from '../config';
 import { Industry } from '../core/types';
 import { industryOf, operatingRatio, specFor, type Building } from '../world/buildings';
-import type { PowerGrid } from './power';
 import type { World } from '../world/world';
 
 export interface ChainReport {
@@ -15,19 +13,17 @@ export interface ChainReport {
 }
 
 /**
- * The supply chain: primary industry -> factories -> shops -> residents.
+ * The production half of the supply chain: primary industry digs and grows,
+ * factories convert.
  *
- * Run once per sim hour, on stockpiles rather than on vehicles. Freight agents
- * would be the honest thing and are the obvious next step, but they are also a
- * second traffic model on top of the one that already exists, and the decisions
- * the chain is here to create -- zone the whole chain, and *connect* it -- are
- * already forced by the one rule below: goods only move between buildings on
- * the same road network. A quarry with no road to the factories is as useless
- * as no quarry at all, which is the thing worth showing.
+ * Moving the goods is not here any more. It used to be -- a consumer reached
+ * out to the nearest supplier on the same road network and the units simply
+ * appeared -- and that produced the right totals while quietly making the road
+ * network irrelevant to the economy it was supposedly carrying. Transport is
+ * now `freight.ts`, where every load is a lorry that has to drive there.
  *
- * Distance is not free either. Each consumer draws from the nearest supplier
- * with stock, and only out to SUPPLY_RANGE_TILES, so a city that puts its
- * industry on the far side of the map starves its shops just as surely.
+ * What is left runs once per sim hour, because production is a rate and
+ * nothing here needs to be finer than that.
  */
 export class SupplyChain {
   report: ChainReport = {
@@ -38,8 +34,8 @@ export class SupplyChain {
     factoriesIdle: 0,
   };
 
-  /** One sim-hour of production, transport and sales. */
-  step(world: World, power: PowerGrid): void {
+  /** One sim-hour of production and conversion. */
+  step(world: World): void {
     const report: ChainReport = {
       rawProduced: 0,
       goodsProduced: 0,
@@ -78,13 +74,10 @@ export class SupplyChain {
       track(b, made > 0);
     }
 
-    // 2. Factories pull raw materials in and turn them into goods.
+    // 2. Factories work through whatever the lorries have brought them.
     for (const b of factories) {
       const spec = specFor(b.type);
       const ratio = operatingRatio(b);
-      const wanted = Math.min(spec.rawPerHour * ratio, spec.storage - b.rawStock);
-      if (wanted > 0) b.rawStock += draw(world, power, b, primaries, wanted);
-
       const possible = Math.min(spec.outputPerHour * ratio, b.rawStock);
       if (possible > 0) {
         b.rawStock -= possible;
@@ -95,14 +88,7 @@ export class SupplyChain {
       track(b, possible > 0 || ratio === 0);
     }
 
-    // 3. Shops restock from the factories.
-    for (const b of shops) {
-      const spec = specFor(b.type);
-      const room = spec.storage - b.goodsStock;
-      if (room > 0) b.goodsStock += draw(world, power, b, factories, room * 0.5);
-    }
-
-    // 4. Residents buy. A shop with nothing on the shelves earns nothing, and
+    // 3. Residents buy. A shop with nothing on the shelves earns nothing, and
     //    that is what the commercial tax is levied on.
     const wanted = (world.population * GOODS_PER_RESIDENT_PER_DAY) / 24;
     let remaining = wanted;
@@ -134,46 +120,6 @@ export class SupplyChain {
     if (wanted <= 0) return 1;
     return Math.min(1, this.report.goodsSold / wanted);
   }
-}
-
-/**
- * Take up to `amount` from the nearest suppliers on the same road network.
- *
- * Nearest-first is what makes siting matter: a factory next to the paddies
- * gets fed before one across town, so a district laid out in the order of the
- * chain works better than one where everything is scattered.
- */
-function draw(
-  world: World,
-  power: PowerGrid,
-  consumer: Building,
-  suppliers: Building[],
-  amount: number,
-): number {
-  if (amount <= 0) return 0;
-  world.refreshAccess(consumer);
-  const grid = power.gridAt(consumer.accessRoad);
-  if (grid < 0) return 0;
-
-  const reachable: Array<{ b: Building; d: number }> = [];
-  for (const s of suppliers) {
-    if (s.goodsStock <= 0) continue;
-    world.refreshAccess(s);
-    if (power.gridAt(s.accessRoad) !== grid) continue;
-    const d = manhattan(s.tile, consumer.tile);
-    if (d > SUPPLY_RANGE_TILES) continue;
-    reachable.push({ b: s, d });
-  }
-  reachable.sort((a, b) => a.d - b.d);
-
-  let taken = 0;
-  for (const { b } of reachable) {
-    if (taken >= amount) break;
-    const got = Math.min(b.goodsStock, amount - taken);
-    b.goodsStock -= got;
-    taken += got;
-  }
-  return taken;
 }
 
 /** Count the hours a building spends unable to do its job. */

@@ -111,7 +111,8 @@ function dropOff(world: World, c: Citizen, station: number): void {
   c.legAfterRide = null;
   c.s = 0;
   c.v = 0;
-  c.state = c.destination === c.work ? CitizenState.ToWork : CitizenState.ToHome;
+  // Back to whichever journey this was; the ride was only ever the middle of it.
+  c.state = c.legState;
   if (stop) {
     c.x = tileCenterX(stop.tile);
     c.y = tileCenterY(stop.tile);

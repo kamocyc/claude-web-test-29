@@ -2,6 +2,7 @@ import { MAP_SIZE } from '../config';
 import type { CitizenState, TravelMode, BuildingType, TileIndex } from '../core/types';
 import type { Citizen } from '../sim/citizen';
 import { CAR_PROFILE } from '../sim/carFollowing';
+import { createLorry, type CargoKind, type Lorry, type LorryState } from '../sim/lorry';
 import type { TaxRates } from '../sim/economy';
 import { Simulation } from '../sim/simulation';
 import { setTrainPosition } from '../sim/trains';
@@ -10,7 +11,7 @@ import type { Building } from './buildings';
 import type { TransitLine, Train } from './transit';
 import { World } from './world';
 
-export const SAVE_VERSION = 3;
+export const SAVE_VERSION = 4;
 export const SAVE_KEY = 'city-sim.save';
 
 /**
@@ -41,6 +42,7 @@ export interface SaveData {
   chainBucket: number;
   fieldBucket: number;
   migrationBucket: number;
+  freightBucket: number;
   settledDay: number;
   money: SavedEconomy;
   /** Base64 of the per-tile float fields (Float32, MAP_SIZE^2 each). */
@@ -57,6 +59,7 @@ export interface SaveData {
   citizens: SavedCitizen[];
   lines: SavedLine[];
   trains: SavedTrain[];
+  lorries: SavedLorry[];
 }
 
 interface SavedEconomy {
@@ -95,6 +98,10 @@ interface SavedCitizen {
   y: number;
   trip: number;
   retry: number;
+  origin: number;
+  leg: number;
+  pantry: number;
+  shopFailed: boolean;
   blocked: number;
   routing: boolean;
   wait: number;
@@ -117,6 +124,24 @@ interface SavedLine {
   stopStation: number[];
   trains: number[];
   ridership: number;
+}
+
+interface SavedLorry {
+  state: number;
+  home: number;
+  dest: number;
+  cargo: number;
+  cargoKind: number;
+  resume: number;
+  s: number;
+  v: number;
+  x: number;
+  y: number;
+  blocked: number;
+  trips: number;
+  tripStart: number;
+  path?: TileIndex[];
+  pending?: TileIndex[];
 }
 
 interface SavedTrain {
@@ -143,6 +168,7 @@ export function serialize(sim: Simulation): SaveData {
     chainBucket: sim.lastChainBucket,
     fieldBucket: sim.lastFieldBucket,
     migrationBucket: sim.lastMigrationBucket,
+    freightBucket: sim.lastFreightBucket,
     settledDay: sim.lastSettledDay,
     money: {
       balance: sim.economy.balance,
@@ -162,6 +188,7 @@ export function serialize(sim: Simulation): SaveData {
     citizens: world.citizens.map(saveCitizen),
     lines: world.lines.map(saveLine),
     trains: world.trains.map(saveTrain),
+    lorries: world.lorries.map(saveLorry),
   };
 }
 
@@ -197,6 +224,10 @@ function saveCitizen(c: Citizen): SavedCitizen {
     y: c.y,
     trip: c.tripStartTick,
     retry: c.retryAtTick,
+    origin: c.origin,
+    leg: c.legState,
+    pantry: c.pantry,
+    shopFailed: c.lastShopFailed,
     blocked: c.blockedTicks,
     routing: c.awaitingPath,
     wait: c.waitStartTick,
@@ -223,6 +254,27 @@ function saveLine(l: TransitLine): SavedLine {
     trains: l.trains.slice(),
     ridership: l.ridership,
   };
+}
+
+function saveLorry(l: Lorry): SavedLorry {
+  const out: SavedLorry = {
+    state: l.state,
+    home: l.home,
+    dest: l.destination,
+    cargo: l.cargo,
+    cargoKind: l.cargoKind,
+    resume: l.resumeAtTick,
+    s: l.s,
+    v: l.v,
+    x: l.x,
+    y: l.y,
+    blocked: l.blockedTicks,
+    trips: l.trips,
+    tripStart: l.tripStartTick,
+  };
+  if (l.path) out.path = l.path.slice();
+  if (l.pendingPath) out.pending = l.pendingPath.slice();
+  return out;
 }
 
 function saveTrain(t: Train): SavedTrain {
@@ -295,7 +347,9 @@ export function deserialize(data: SaveData): Simulation {
       mode: c.mode as TravelMode,
       profile: CAR_PROFILE,
       path: c.path ?? null,
+      origin: c.origin,
       destination: c.dest,
+      legState: c.leg as CitizenState,
       s: c.s,
       v: c.v,
       x: c.x,
@@ -315,6 +369,8 @@ export function deserialize(data: SaveData): Simulation {
       happiness: c.happy,
       unhappyHours: c.unhappy,
       lastTripTicks: c.lastTrip,
+      pantry: c.pantry,
+      lastShopFailed: c.shopFailed,
       left: false,
     });
   });
@@ -358,6 +414,28 @@ export function deserialize(data: SaveData): Simulation {
     }
   });
 
+  world.lorries.length = 0;
+  data.lorries.forEach((l, index) => {
+    const lorry = createLorry(index, l.home, 0);
+    lorry.state = l.state as LorryState;
+    lorry.destination = l.dest;
+    lorry.cargo = l.cargo;
+    lorry.cargoKind = l.cargoKind as CargoKind;
+    lorry.resumeAtTick = l.resume;
+    lorry.s = l.s;
+    lorry.v = l.v;
+    lorry.x = l.x;
+    lorry.y = l.y;
+    lorry.prevX = l.x;
+    lorry.prevY = l.y;
+    lorry.blockedTicks = l.blocked;
+    lorry.trips = l.trips;
+    lorry.tripStartTick = l.tripStart;
+    lorry.path = l.path ?? null;
+    lorry.pendingPath = l.pending ?? null;
+    world.lorries.push(lorry);
+  });
+
   world.rng.setState(data.rngState);
   world.nextCitizenSeed = data.citizenSeed;
   world.revision++;
@@ -369,6 +447,7 @@ export function deserialize(data: SaveData): Simulation {
   sim.lastChainBucket = data.chainBucket;
   sim.lastFieldBucket = data.fieldBucket;
   sim.lastMigrationBucket = data.migrationBucket;
+  sim.lastFreightBucket = data.freightBucket;
   sim.lastSettledDay = data.settledDay;
   sim.economy.restore({
     balance: data.money.balance,

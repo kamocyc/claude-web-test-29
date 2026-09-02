@@ -15,6 +15,7 @@ import { capacityFor, isHome, isWorkplace, specFor, type Building } from './buil
 import { groundSupports } from './zoneRules';
 import { TileMap } from './tileMap';
 import { TileNetwork } from './tileNetwork';
+import type { Lorry } from '../sim/lorry';
 import { LINE_COLORS, type TransitLine, type Train } from './transit';
 
 export class World {
@@ -25,6 +26,12 @@ export class World {
   readonly citizens: Citizen[] = [];
   readonly lines: TransitLine[] = [];
   readonly trains: Train[] = [];
+  /**
+   * The freight fleet. Unlike citizens this array is never compacted: a
+   * retired lorry keeps its slot and the next delivery reuses it, which is
+   * what lets a lorry's id stay stable without any renumbering pass.
+   */
+  readonly lorries: Lorry[] = [];
   readonly rng: Rng;
 
   /** Bumped whenever buildings or lines appear or vanish, so UI can refresh. */

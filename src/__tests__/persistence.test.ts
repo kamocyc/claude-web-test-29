@@ -57,6 +57,12 @@ function fingerprint(sim: Simulation): string {
   for (const t of sim.world.trains) {
     parts.push(`T${t.s.toFixed(4)}:${t.passengers.length}`);
   }
+  // Lorries belong in the fingerprint for the same reason the trains do: a
+  // subsystem the identity test does not look at is a subsystem the identity
+  // test does not protect.
+  for (const l of sim.world.lorries) {
+    parts.push(`L${l.state}:${l.s.toFixed(4)}:${l.cargo.toFixed(3)}:${l.destination}`);
+  }
   return parts.join('|');
 }
 
@@ -135,8 +141,11 @@ describe('save and load', () => {
     expect(restored.lastSettledDay).toBe(sim.lastSettledDay);
 
     // Stockpiles: a loaded city does not restart its supply chain from empty.
+    // Goods riding around on a lorry count too -- they are as much part of the
+    // city's stock as the ones on a shelf.
     const stock = (s: Simulation): number =>
-      s.world.buildings.reduce((n, b) => n + b.goodsStock + b.rawStock, 0);
+      s.world.buildings.reduce((n, b) => n + b.goodsStock + b.rawStock, 0)
+      + s.world.lorries.reduce((n, l) => n + l.cargo, 0);
     expect(stock(restored)).toBeCloseTo(stock(sim), 5);
 
     // Fields and wellbeing.
@@ -147,6 +156,8 @@ describe('save and load', () => {
     expect(restored.world.citizens.map((c) => [c.seed, Math.round(c.happiness)]))
       .toEqual(sim.world.citizens.map((c) => [c.seed, Math.round(c.happiness)]));
     expect(restored.world.nextCitizenSeed).toBe(sim.world.nextCitizenSeed);
+    expect(restored.world.lorries.length).toBe(sim.world.lorries.length);
+    expect(restored.lastFreightBucket).toBe(sim.lastFreightBucket);
 
     // The resource layer is part of the map, so primary industry still has
     // somewhere to be.

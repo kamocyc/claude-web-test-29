@@ -2,6 +2,7 @@ import {
   CAR_FREE_SPEED,
   CHAIN_INTERVAL_MINUTES,
   FIELD_INTERVAL_MINUTES,
+  FREIGHT_INTERVAL_MINUTES,
   GROWTH_INTERVAL_MINUTES,
   MIGRATION_INTERVAL_MINUTES,
   PATH_REQUESTS_PER_TICK,
@@ -11,7 +12,14 @@ import {
 } from '../config';
 import { Clock, minutesToTicks } from '../core/clock';
 import { manhattan } from '../core/grid';
-import { CitizenState, isAtRest, TravelMode, type BuildingId } from '../core/types';
+import {
+  arrivalStateFor,
+  CitizenState,
+  isAtRest,
+  isTravelling,
+  TravelMode,
+  type BuildingId,
+} from '../core/types';
 import { growCity } from '../world/zoning';
 import type { World } from '../world/world';
 import { tileCenterX, tileCenterY, type Citizen } from './citizen';
@@ -20,6 +28,7 @@ import { Crossings } from './crossings';
 import { Occupancy } from './occupancy';
 import { Signals } from './signals';
 import { Statistics } from './statistics';
+import { Freight } from './freight';
 import { Economy } from './economy';
 import { PowerGrid } from './power';
 import { SupplyChain } from './goods';
@@ -48,6 +57,7 @@ export class Simulation {
   readonly economy = new Economy();
   readonly power = new PowerGrid();
   readonly chain = new SupplyChain();
+  readonly freight = new Freight();
   readonly noise = new NoiseField();
   readonly landValue = new LandValueField();
   readonly happiness = new Happiness();
@@ -67,6 +77,7 @@ export class Simulation {
   lastChainBucket = -1;
   lastFieldBucket = -1;
   lastMigrationBucket = -1;
+  lastFreightBucket = -1;
   lastSettledDay = -1;
 
   constructor(readonly world: World) {}
@@ -79,6 +90,7 @@ export class Simulation {
     this.crossings.update(this.world);
     this.signals.refresh(this.world);
     this.rescueOrphanedRiders();
+    this.freight.rescueOrphaned(this.world, this.clock.tick);
     this.moveCitizens();
     this.noise.sample(this.occupancy);
     this.runCity();
@@ -97,19 +109,17 @@ export class Simulation {
       switch (c.state) {
         case CitizenState.AtHome:
           if (inDepartureWindow(minute, departForWorkMinute(c.seed), DEPARTURE_WINDOW_MINUTES)) {
-            this.beginTrip(c, CitizenState.ToWork, c.work);
+            this.beginTrip(c, CitizenState.ToWork, c.home, c.work);
           }
           break;
         case CitizenState.AtWork:
           if (inDepartureWindow(minute, departForHomeMinute(c.seed), DEPARTURE_WINDOW_MINUTES)) {
-            this.beginTrip(c, CitizenState.ToHome, c.home);
+            this.beginTrip(c, CitizenState.ToHome, c.work, c.home);
           }
           break;
         case CitizenState.Stranded:
           if (this.clock.tick >= c.retryAtTick) {
-            const target = c.destination;
-            const wantsWork = target === c.work;
-            this.beginTrip(c, wantsWork ? CitizenState.ToWork : CitizenState.ToHome, target);
+            this.beginTrip(c, c.legState, c.origin, c.destination);
           }
           break;
         default:
@@ -118,8 +128,15 @@ export class Simulation {
     }
   }
 
-  private beginTrip(c: Citizen, state: CitizenState, destination: BuildingId): void {
+  private beginTrip(
+    c: Citizen,
+    state: CitizenState,
+    origin: BuildingId,
+    destination: BuildingId,
+  ): void {
     c.state = state;
+    c.legState = state;
+    c.origin = origin;
     c.destination = destination;
     c.path = null;
     c.s = 0;
@@ -154,15 +171,13 @@ export class Simulation {
       const c = this.pathQueue.shift()!;
       c.awaitingPath = false;
       served++;
-      if (c.state === CitizenState.ToWork || c.state === CitizenState.ToHome) {
-        this.route(c);
-      }
+      if (isTravelling(c.state)) this.route(c);
     }
   }
 
   private route(c: Citizen): void {
     const { world } = this;
-    const from = world.buildings[c.state === CitizenState.ToWork ? c.home : c.work];
+    const from = world.buildings[c.origin];
     const to = world.buildings[c.destination];
 
     if (!from || !to || !world.isAlive(from) || !world.isAlive(to)) {
@@ -240,12 +255,20 @@ export class Simulation {
 
   // --- Movement ------------------------------------------------------------
 
+  /**
+   * Everything on the road, in two phases: publish where every vehicle is,
+   * then move them all against that one snapshot. Cars and lorries share it,
+   * so neither gets to go first.
+   */
   private moveCitizens(): void {
     this.occupancy.clear();
     for (const c of this.world.citizens) {
       if (isAtRest(c.state)) continue;
       registerVehicle(this.world, this.occupancy, c);
     }
+    this.freight.forEachDriving(this.world, (lorry) => {
+      registerVehicle(this.world, this.occupancy, lorry);
+    });
 
     let stranded = 0;
     for (const c of this.world.citizens) {
@@ -253,7 +276,7 @@ export class Simulation {
         stranded++;
         continue;
       }
-      if (c.state !== CitizenState.ToWork && c.state !== CitizenState.ToHome) continue;
+      if (!isTravelling(c.state)) continue;
       if (!c.path) {
         // Travelling with no route: the request is still in the queue, or the
         // city was just loaded from a save and the queue went with the old
@@ -263,7 +286,7 @@ export class Simulation {
       }
 
       if (pathIsBroken(this.world, c)) {
-        this.beginTrip(c, c.state, c.destination);
+        this.beginTrip(c, c.legState, c.origin, c.destination);
         continue;
       }
 
@@ -281,7 +304,14 @@ export class Simulation {
       }
     }
     this.strandedCount = stranded;
-    this.traffic.update(this.world, this.occupancy);
+    this.freight.step(
+      this.world,
+      this.occupancy,
+      this.crossings,
+      this.signals,
+      this.clock.tick,
+    );
+    this.traffic.update(this.occupancy);
   }
 
   /**
@@ -296,7 +326,7 @@ export class Simulation {
       c.waitStartTick = this.clock.tick;
       return;
     }
-    c.state = c.state === CitizenState.ToWork ? CitizenState.AtWork : CitizenState.AtHome;
+    c.state = arrivalStateFor(c.legState);
     c.lastTripTicks = Math.max(0, this.clock.tick - c.tripStartTick);
     this.stats.recordTrip(c, this.clock.tick);
   }
@@ -317,11 +347,7 @@ export class Simulation {
       if (c.state !== CitizenState.Waiting && c.state !== CitizenState.Riding) continue;
       const line = c.ride ? this.world.lines[c.ride.line] : undefined;
       if (line && this.world.lineIsAlive(line)) continue;
-      this.beginTrip(
-        c,
-        c.destination === c.work ? CitizenState.ToWork : CitizenState.ToHome,
-        c.destination,
-      );
+      this.beginTrip(c, c.legState, c.origin, c.destination);
     }
   }
 
@@ -346,7 +372,10 @@ export class Simulation {
       this.power.update(this.world);
     }
     if (this.due('lastChainBucket', minute, CHAIN_INTERVAL_MINUTES)) {
-      this.chain.step(this.world, this.power);
+      this.chain.step(this.world);
+    }
+    if (this.due('lastFreightBucket', minute, FREIGHT_INTERVAL_MINUTES)) {
+      this.freight.dispatch(this.world, this.pathCache, this.traffic, this.clock.tick);
     }
     if (this.due('lastFieldBucket', minute, FIELD_INTERVAL_MINUTES)) {
       this.noise.update(this.world);
@@ -369,7 +398,10 @@ export class Simulation {
 
     // The books close once a day, at midnight.
     if (this.clock.day !== this.lastSettledDay) {
-      if (this.lastSettledDay >= 0) this.economy.settleDay(this.world);
+      if (this.lastSettledDay >= 0) {
+        this.economy.settleDay(this.world);
+        this.freight.endDay();
+      }
       this.lastSettledDay = this.clock.day;
     }
   }
@@ -377,7 +409,7 @@ export class Simulation {
   /** True once per bucket of `everyMinutes`, remembering the last one seen. */
   private due(
     field: 'lastPowerBucket' | 'lastChainBucket' | 'lastFieldBucket'
-      | 'lastMigrationBucket' | 'lastGrowthBucket',
+      | 'lastMigrationBucket' | 'lastGrowthBucket' | 'lastFreightBucket',
     minute: number,
     everyMinutes: number,
   ): boolean {

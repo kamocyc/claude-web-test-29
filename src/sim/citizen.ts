@@ -1,4 +1,4 @@
-import { MAP_SIZE } from '../config';
+import { MAP_SIZE, STARTING_PANTRY } from '../config';
 import { hashToUnit, type Rng } from '../core/rng';
 import {
   CitizenState,
@@ -44,7 +44,18 @@ export interface Citizen {
    * driven when `mode` is Car.
    */
   path: TileIndex[] | null;
+  /** Where this trip started. */
+  origin: BuildingId;
   destination: BuildingId;
+  /**
+   * Which journey this is, for as long as it lasts.
+   *
+   * `state` becomes Waiting or Riding while a train is involved, so it cannot
+   * answer "where was this person going?" -- and the old answer, comparing the
+   * destination against home and work, stopped being a complete question the
+   * moment shops became a third place to go.
+   */
+  legState: CitizenState;
 
   /** Distance travelled along `path`, in tiles. Integer part = segment index. */
   s: number;
@@ -102,6 +113,14 @@ export interface Citizen {
   unhappyHours: number;
   /** Duration of the last completed trip, which is what the commute is judged on. */
   lastTripTicks: number;
+  /**
+   * Days of groceries in the cupboard. Drains steadily and is refilled by
+   * going to a shop, which is what turns "the city has goods" into "this
+   * person could actually buy some".
+   */
+  pantry: number;
+  /** True when the last shopping trip found the shelves bare. */
+  lastShopFailed: boolean;
   /** Set when the citizen has left the city; the hourly pass then removes them. */
   left: boolean;
 }
@@ -134,7 +153,9 @@ export function createCitizen(
     mode: TravelMode.Walk,
     profile: CAR_PROFILE,
     path: null,
+    origin: home,
     destination: home,
+    legState: CitizenState.AtHome,
     s: 0,
     v: 0,
     x: tileCenterX(homeTile),
@@ -154,6 +175,8 @@ export function createCitizen(
     happiness: -1,
     unhappyHours: 0,
     lastTripTicks: 0,
+    pantry: STARTING_PANTRY,
+    lastShopFailed: false,
     left: false,
   };
 }

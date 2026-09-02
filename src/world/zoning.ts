@@ -1,7 +1,10 @@
 import {
   ABANDON_AFTER_HOURS,
   BUILDINGS_PER_GROWTH_STEP,
+  CHAIN_HEADROOM,
+  GOODS_PER_RESIDENT_PER_DAY,
   HIGH_DENSITY_LAND_VALUE,
+  RESIDENTS_PER_SHOP,
   JOB_SURPLUS_RATIO,
 } from '../config';
 import { manhattan } from '../core/grid';
@@ -11,6 +14,7 @@ import {
   hasVacancy,
   industryOf,
   isWorkplace,
+  operatingRatio,
   specFor,
   type Building,
 } from './buildings';
@@ -37,6 +41,23 @@ export interface Demand {
   shops: number;
   factories: number;
   primaries: number;
+
+  /**
+   * The chain measured as rates rather than as counts.
+   *
+   * Counting starving buildings was enough while goods teleported: a surplus
+   * factory simply piled up stock that nobody had to carry. Now every unit
+   * rides on a lorry, and a city with four times the factories it needs does
+   * not merely waste the land -- its phantom demand consumes the whole fleet
+   * and the shops it was supposed to supply run dry. So growth asks whether
+   * the city can *make* what it consumes, not whether somebody is short.
+   */
+  goodsPerHour: number;
+  goodsCapacity: number;
+  rawPerHour: number;
+  rawCapacity: number;
+  /** Shops the population can actually keep busy. */
+  shopsNeeded: number;
 }
 
 export function measureDemand(world: World): Demand {
@@ -49,6 +70,11 @@ export function measureDemand(world: World): Demand {
     shops: 0,
     factories: 0,
     primaries: 0,
+    goodsPerHour: (world.population * GOODS_PER_RESIDENT_PER_DAY) / 24,
+    goodsCapacity: 0,
+    rawPerHour: 0,
+    rawCapacity: 0,
+    shopsNeeded: Math.max(1, Math.ceil(world.population / RESIDENTS_PER_SHOP)),
   };
 
   for (const c of world.citizens) {
@@ -65,6 +91,8 @@ export function measureDemand(world: World): Demand {
         break;
       case Industry.Secondary:
         d.factories++;
+        d.goodsCapacity += specFor(b.type).outputPerHour * operatingRatio(b);
+        d.rawPerHour += specFor(b.type).rawPerHour * operatingRatio(b);
         // "Starved" has to mean *could not produce*, not "stock is empty".
         // A factory that is working converts everything it receives each hour,
         // so its raw pile is empty almost by definition -- reading that as
@@ -74,6 +102,7 @@ export function measureDemand(world: World): Demand {
         break;
       case Industry.Primary:
         d.primaries++;
+        d.rawCapacity += specFor(b.type).outputPerHour * operatingRatio(b);
         break;
       default:
         break;
@@ -125,34 +154,32 @@ export function growCity(world: World, landValue: (tile: TileIndex) => number): 
 function nextWorkplaceZone(world: World, demand: Demand): Zone | null {
   const available = (zone: Zone): boolean => collectZonedTiles(world, zone).length > 0;
 
-  if (demand.factoriesStarved > 0 || (demand.factories > 0 && demand.primaries === 0)) {
+  // Enough of the chain to cover consumption, plus a margin so it is not
+  // living exactly hand to mouth.
+  const needsPrimary = demand.rawCapacity < demand.rawPerHour * CHAIN_HEADROOM;
+  const needsFactory = demand.goodsCapacity < demand.goodsPerHour * CHAIN_HEADROOM;
+
+  if (needsPrimary && (demand.factories > 0 || demand.primaries === 0)) {
     const primary = bestPrimaryZone(world);
     if (primary !== null) return primary;
   }
+  if (needsFactory && available(Zone.Industrial)) return Zone.Industrial;
 
-  // Every factory idle and no primary land left to zone: another factory would
-  // stand idle beside them. The city stops trying and puts people in offices
-  // instead, which leaves the player looking at a row of dead factories and a
-  // warning telling them exactly which link of the chain is missing.
-  const chainBlocked = demand.factories > 0 && demand.factoriesStarved >= demand.factories;
-
-  if (!chainBlocked && (demand.shopsStarved > 0
-    || (demand.shops > 0 && demand.factories === 0))) {
-    if (available(Zone.Industrial)) return Zone.Industrial;
-  }
-  // A city with nowhere to shop needs shops before anything else.
-  if (demand.shops === 0 && available(Zone.Commercial)) return Zone.Commercial;
-
-  // Offices need no goods at all, so a city that cannot feed its shops can
-  // still put people to work in them -- which is exactly why they are the
-  // fallback rather than the first choice.
-  const fallback = chainBlocked
-    ? [Zone.Office, Zone.Commercial]
-    : [Zone.Commercial, Zone.Office, Zone.Industrial];
-  for (const zone of fallback) {
+  // Enough shops for the people to shop in, and after that offices.
+  //
+  // Shops used to be the default job filler, which quietly scaled them with
+  // the population rather than with trade: a city of a thousand grew a hundred
+  // and forty of them, and every one wanted its shelves kept full by the same
+  // finite fleet. Offices need no deliveries at all, which is exactly what
+  // makes them the right place to put the jobs a city has left over.
+  const wantShops = demand.shops < demand.shopsNeeded;
+  const order = wantShops
+    ? [Zone.Commercial, Zone.Office]
+    : [Zone.Office, Zone.Commercial];
+  for (const zone of order) {
     if (available(zone)) return zone;
   }
-  return bestPrimaryZone(world);
+  return needsPrimary ? bestPrimaryZone(world) : null;
 }
 
 /** The primary zone with the most room, so growth follows what was zoned. */

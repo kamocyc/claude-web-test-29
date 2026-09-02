@@ -406,7 +406,7 @@ describe('mode choice', () => {
     // day contains a second rush hour, so comparing two points in the cycle
     // would say nothing about recovery either way.
     const empty = new Occupancy();
-    for (let i = 0; i < 4000; i++) sim.traffic.update(sim.world, empty);
+    for (let i = 0; i < 4000; i++) sim.traffic.update(empty);
 
     expect(sim.traffic.speedRatio(tile)).toBeGreaterThan(jammed);
     expect(sim.traffic.speedRatio(tile)).toBe(1);
