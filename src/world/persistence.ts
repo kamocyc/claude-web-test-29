@@ -102,6 +102,7 @@ interface SavedCitizen {
   leg: number;
   pantry: number;
   shopFailed: boolean;
+  nextShop: number;
   blocked: number;
   routing: boolean;
   wait: number;
@@ -228,6 +229,7 @@ function saveCitizen(c: Citizen): SavedCitizen {
     leg: c.legState,
     pantry: c.pantry,
     shopFailed: c.lastShopFailed,
+    nextShop: c.nextShopTick,
     blocked: c.blockedTicks,
     routing: c.awaitingPath,
     wait: c.waitStartTick,
@@ -371,6 +373,7 @@ export function deserialize(data: SaveData): Simulation {
       lastTripTicks: c.lastTrip,
       pantry: c.pantry,
       lastShopFailed: c.shopFailed,
+      nextShopTick: c.nextShop,
       left: false,
     });
   });

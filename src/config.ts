@@ -307,8 +307,16 @@ export const FREIGHT_DISPATCHES_PER_ROUND = 12;
 /** Nearest suppliers considered per order, before the road route is checked. */
 export const FREIGHT_SUPPLIER_CANDIDATES = 8;
 
-/** Stock a consumer is topped up to, leaving room for what is already coming. */
-export const FREIGHT_TARGET_FILL = 0.6;
+/**
+ * How full a consumer is topped up to, leaving room for the load already on
+ * its way.
+ *
+ * Kept high for the shops in particular: real demand arrives in one evening
+ * lump rather than smoothly through the day, so a shelf that is merely
+ * adequate at noon is bare by eight and the shoppers who walked there go home
+ * empty.
+ */
+export const FREIGHT_TARGET_FILL = 0.85;
 
 /** A part-laden lorry is not worth the lane it occupies. */
 export const FREIGHT_MIN_LOAD = 5;
@@ -401,8 +409,25 @@ export const SHOP_CANDIDATES = 6;
 export const SHOPPING_MINUTE = 18 * 60 + 30;
 export const SHOPPING_JITTER_MINUTES = 150;
 
+/**
+ * How long the shopping mood lasts, against the commute's 30 minutes.
+ *
+ * A half-hour window is right for a job you have to be at; for shopping it
+ * quietly means most people never go, because they are still on the way home
+ * through the whole of it and the chance does not come round again until
+ * tomorrow.
+ */
+export const SHOPPING_WINDOW_MINUTES = 240;
+
+/** Nobody shops in the small hours, however empty the cupboard is. */
+export const SHOP_OPEN_MINUTE = 8 * 60;
+export const SHOP_CLOSE_MINUTE = 22 * 60;
+
 /** Time spent in the shop. About 9 sim minutes. */
 export const SHOPPING_DWELL_TICKS = 60;
+
+/** How long somebody gives up for after finding the shelves bare: 3 hours. */
+export const SHOPPING_RETRY_TICKS = 1200;
 
 // --- Noise, land value, happiness -------------------------------------------
 

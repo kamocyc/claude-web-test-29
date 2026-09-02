@@ -1,5 +1,7 @@
 import {
   SCHEDULE_JITTER_MINUTES,
+  SHOPPING_JITTER_MINUTES,
+  SHOPPING_MINUTE,
   WORK_END_MINUTE,
   WORK_START_MINUTE,
 } from '../config';
@@ -7,6 +9,7 @@ import { scheduleJitter } from './citizen';
 
 const SALT_MORNING = 0x9e37;
 const SALT_EVENING = 0x85eb;
+const SALT_SHOPPING = 0xc2b2;
 
 /**
  * Departure times are derived from the citizen's seed, not stored and not
@@ -19,6 +22,17 @@ export function departForWorkMinute(seed: number): number {
 
 export function departForHomeMinute(seed: number): number {
   return wrapDay(WORK_END_MINUTE + scheduleJitter(seed, SALT_EVENING) * SCHEDULE_JITTER_MINUTES);
+}
+
+/**
+ * When this citizen prefers to do the shopping.
+ *
+ * Spread wider than the commute, because shopping has no start time to be
+ * late for -- and because the whole point of the jitter is to stop the city
+ * arriving at the same shop in the same hour and all coming home empty.
+ */
+export function shoppingMinute(seed: number): number {
+  return wrapDay(SHOPPING_MINUTE + scheduleJitter(seed, SALT_SHOPPING) * SHOPPING_JITTER_MINUTES);
 }
 
 function wrapDay(m: number): number {

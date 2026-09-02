@@ -74,7 +74,9 @@ describe('electricity', () => {
     for (const b of world.buildings) {
       if (b.alive && b.type === BuildingType.PowerPlant) world.demolish(b.id);
     }
-    run(sim, TICKS_PER_DAY);
+    // Two days: the first still contains the morning's trade, because the
+    // shops were selling to real people right up until the lights went out.
+    run(sim, TICKS_PER_DAY * 2);
 
     expect(sim.chain.report.goodsProduced).toBe(0);
     expect(sim.economy.lastDay.income).toBe(0);

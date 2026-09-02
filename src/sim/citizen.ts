@@ -121,6 +121,16 @@ export interface Citizen {
   pantry: number;
   /** True when the last shopping trip found the shelves bare. */
   lastShopFailed: boolean;
+  /**
+   * The earliest tick this citizen will try the shops again.
+   *
+   * Without a cooling-off period a wasted trip is repeated immediately, and a
+   * city whose shelves are short puts nearly half its population on the road
+   * permanently, walking back and forth to empty shops. People give up for a
+   * few hours instead, which is both what anybody would do and what keeps a
+   * shortage visible as hunger rather than as traffic.
+   */
+  nextShopTick: number;
   /** Set when the citizen has left the city; the hourly pass then removes them. */
   left: boolean;
 }
@@ -177,6 +187,7 @@ export function createCitizen(
     lastTripTicks: 0,
     pantry: STARTING_PANTRY,
     lastShopFailed: false,
+    nextShopTick: 0,
     left: false,
   };
 }

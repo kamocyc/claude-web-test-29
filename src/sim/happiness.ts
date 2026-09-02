@@ -7,6 +7,7 @@ import {
 } from '../config';
 import { ticksToMinutes } from '../core/clock';
 import { createCitizen, type Citizen } from './citizen';
+import { shoppingSatisfaction } from './shopping';
 import { hasVacancy, isHome, type Building } from '../world/buildings';
 import type { World } from '../world/world';
 import type { Economy } from './economy';
@@ -75,7 +76,7 @@ export class Happiness {
     // An overdraft is the city visibly failing to pay for itself, and everyone
     // living in it notices.
     const civic = economy.inOverdraft ? -12 : 0;
-    const serviceScore = serviceLevel * 100;
+    void serviceLevel;
 
     for (const c of world.citizens) {
       const home = world.buildings[c.home];
@@ -85,6 +86,9 @@ export class Happiness {
       const commute = commuteScore(c, tick, employed(world, c));
       const employment = employed(world, c) ? 100 : 20;
       const powered = home && home.alive && home.powered ? 100 : 15;
+      // Shopping is personal now: what matters is whether *this* household
+      // could fill its cupboard, not whether the city as a whole was supplied.
+      const serviceScore = shoppingSatisfaction(c) * 100;
 
       const score = clamp(
         housing * 0.3

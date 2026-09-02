@@ -7,6 +7,12 @@ import {
   MIGRATION_INTERVAL_MINUTES,
   PATH_REQUESTS_PER_TICK,
   POWER_INTERVAL_MINUTES,
+  SHOPPING_DWELL_TICKS,
+  SHOPPING_RETRY_TICKS,
+  SHOPPING_TRIGGER,
+  SHOPPING_WINDOW_MINUTES,
+  SHOP_CLOSE_MINUTE,
+  SHOP_OPEN_MINUTE,
   WALK_DISTANCE_THRESHOLD,
   WALK_SPEED,
 } from '../config';
@@ -35,7 +41,13 @@ import { SupplyChain } from './goods';
 import { NoiseField } from './noise';
 import { LandValueField } from './landValue';
 import { Happiness } from './happiness';
-import { departForHomeMinute, departForWorkMinute, inDepartureWindow } from './schedule';
+import {
+  departForHomeMinute,
+  departForWorkMinute,
+  inDepartureWindow,
+  shoppingMinute,
+} from './schedule';
+import { buy, chooseShop } from './shopping';
 import { findPath, PathCache } from './pathfinding';
 import { advanceTrain, carryPassengers } from './trains';
 import { planTransit, transitWins } from './transitPlanner';
@@ -104,17 +116,23 @@ export class Simulation {
     const minute = this.clock.minuteOfDay;
 
     for (const c of this.world.citizens) {
-      if (c.work < 0) continue;
-
       switch (c.state) {
         case CitizenState.AtHome:
-          if (inDepartureWindow(minute, departForWorkMinute(c.seed), DEPARTURE_WINDOW_MINUTES)) {
+          if (c.work >= 0
+            && inDepartureWindow(minute, departForWorkMinute(c.seed), DEPARTURE_WINDOW_MINUTES)) {
             this.beginTrip(c, CitizenState.ToWork, c.home, c.work);
+            break;
           }
+          this.maybeGoShopping(c, minute);
           break;
         case CitizenState.AtWork:
           if (inDepartureWindow(minute, departForHomeMinute(c.seed), DEPARTURE_WINDOW_MINUTES)) {
             this.beginTrip(c, CitizenState.ToHome, c.work, c.home);
+          }
+          break;
+        case CitizenState.AtShop:
+          if (this.clock.tick >= c.retryAtTick) {
+            this.beginTrip(c, CitizenState.ToHome, c.destination, c.home);
           }
           break;
         case CitizenState.Stranded:
@@ -126,6 +144,29 @@ export class Simulation {
           break;
       }
     }
+  }
+
+  /**
+   * Head out for the groceries when the cupboard is low and the evening is
+   * this citizen's shopping hour.
+   *
+   * Unlike the commute this applies to everybody, jobless included -- which is
+   * also the first time the unemployed have had any reason to leave the house.
+   */
+  private maybeGoShopping(c: Citizen, minute: number): void {
+    if (c.pantry > SHOPPING_TRIGGER) return;
+    if (this.clock.tick < c.nextShopTick) return;
+
+    const preferred = inDepartureWindow(minute, shoppingMinute(c.seed), SHOPPING_WINDOW_MINUTES);
+    // An empty cupboard does not wait for tomorrow evening; it goes out
+    // whenever the shops are open.
+    const desperate = c.pantry <= 0
+      && minute >= SHOP_OPEN_MINUTE && minute <= SHOP_CLOSE_MINUTE;
+    if (!preferred && !desperate) return;
+
+    const shop = chooseShop(this.world, c);
+    if (shop < 0) return;
+    this.beginTrip(c, CitizenState.ToShop, c.home, shop);
   }
 
   private beginTrip(
@@ -177,9 +218,25 @@ export class Simulation {
 
   private route(c: Citizen): void {
     const { world } = this;
-    const from = world.buildings[c.origin];
-    const to = world.buildings[c.destination];
+    let from = world.buildings[c.origin];
+    let to = world.buildings[c.destination];
 
+    // The building a trip started from can be demolished while somebody is
+    // inside it -- a shop that ran out of stock long enough to be abandoned is
+    // the common case now that people go to shops. They are standing in the
+    // street, so the trip restarts from home rather than stranding them
+    // forever against an address that no longer exists.
+    if (!from || !world.isAlive(from)) {
+      c.origin = c.home;
+      from = world.buildings[c.home];
+    }
+    // Somewhere that no longer exists is not worth travelling to; go home.
+    if (!to || !world.isAlive(to)) {
+      c.legState = CitizenState.ToHome;
+      c.state = CitizenState.ToHome;
+      c.destination = c.home;
+      to = world.buildings[c.home];
+    }
     if (!from || !to || !world.isAlive(from) || !world.isAlive(to)) {
       this.strand(c);
       return;
@@ -329,6 +386,18 @@ export class Simulation {
     c.state = arrivalStateFor(c.legState);
     c.lastTripTicks = Math.max(0, this.clock.tick - c.tripStartTick);
     this.stats.recordTrip(c, this.clock.tick);
+
+    if (c.state === CitizenState.AtShop) {
+      const shop = this.world.buildings[c.destination];
+      if (shop && shop.alive) this.chain.recordSale(buy(shop, c));
+      else c.lastShopFailed = true;
+      // A short browse, then home -- whether or not the trip was worth it.
+      c.retryAtTick = this.clock.tick + SHOPPING_DWELL_TICKS;
+      // Nobody sets out again straight away, whether the trip worked or not.
+      // A full basket lasts days and never notices this; a half-filled one
+      // would otherwise turn back round at the door.
+      c.nextShopTick = this.clock.tick + SHOPPING_RETRY_TICKS;
+    }
   }
 
   private moveTrains(): void {

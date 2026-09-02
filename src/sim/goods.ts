@@ -1,7 +1,7 @@
-import { GOODS_PER_RESIDENT_PER_DAY } from '../config';
 import { Industry } from '../core/types';
 import { industryOf, operatingRatio, specFor, type Building } from '../world/buildings';
 import type { World } from '../world/world';
+import { PANTRY_DRAIN_PER_HOUR } from './shopping';
 
 export interface ChainReport {
   rawProduced: number;
@@ -34,7 +34,9 @@ export class SupplyChain {
     factoriesIdle: 0,
   };
 
-  /** One sim-hour of production and conversion. */
+  private soldSinceLastStep = 0;
+
+  /** One sim-hour of production, conversion and consumption. */
   step(world: World): void {
     const report: ChainReport = {
       rawProduced: 0,
@@ -88,37 +90,49 @@ export class SupplyChain {
       track(b, possible > 0 || ratio === 0);
     }
 
-    // 3. Residents buy. A shop with nothing on the shelves earns nothing, and
-    //    that is what the commercial tax is levied on.
-    const wanted = (world.population * GOODS_PER_RESIDENT_PER_DAY) / 24;
-    let remaining = wanted;
-    // Water-filling: each shop serves its share of what is *left*, so a shop
-    // that has run out does not silently cost the city that share. Dividing by
-    // the original count instead leaves about a third of the demand unserved
-    // even when the warehouses are full, which reads as a broken chain when
-    // nothing is actually wrong.
-    const open = shops.filter((b) => operatingRatio(b) > 0);
-    for (let i = 0; i < open.length; i++) {
-      const b = open[i];
-      const share = Math.min(b.goodsStock, remaining / (open.length - i));
-      b.goodsStock -= share;
-      b.soldToday += share;
-      remaining -= share;
-      report.goodsSold += share;
-      track(b, share > 0);
-    }
+    // 3. The shops: what they sold is what shoppers actually carried out of
+    //    them over the past hour, not a share of an abstract total.
+    report.goodsSold = this.soldSinceLastStep;
+    this.soldSinceLastStep = 0;
     for (const b of shops) {
       if (b.goodsStock <= 0) report.shopsEmpty++;
+      // A shop with stock is doing its job even in a quiet hour; only an
+      // empty one is failing, and only that should get it closed down.
+      track(b, b.goodsStock > 0 || operatingRatio(b) === 0);
+    }
+
+    // 4. Every household eats.
+    for (const c of world.citizens) {
+      c.pantry = Math.max(0, c.pantry - PANTRY_DRAIN_PER_HOUR);
     }
 
     this.report = report;
   }
 
-  /** How much of what residents wanted to buy the shops could actually serve. */
+  /** Called by a citizen walking out of a shop with their shopping. */
+  recordSale(units: number): void {
+    this.soldSinceLastStep += units;
+  }
+
+  /**
+   * How well the city is fed, as the share of households with something in
+   * the cupboard.
+   *
+   * A stock rather than a flow. Measuring the hour's sales against the hour's
+   * demand looked reasonable while consumption was a smooth abstraction, but
+   * real shopping trips are lumpy -- everybody buys three days at once, in
+   * the evening -- so an hourly ratio would swing between nothing and
+   * everything for a city that was perfectly well supplied. What the question
+   * is actually asking is whether people can buy things, and the cupboards
+   * answer it.
+   */
   serviceLevel(world: World): number {
-    const wanted = (world.population * GOODS_PER_RESIDENT_PER_DAY) / 24;
-    if (wanted <= 0) return 1;
-    return Math.min(1, this.report.goodsSold / wanted);
+    if (world.citizens.length === 0) return 1;
+    let fed = 0;
+    for (const c of world.citizens) {
+      if (c.pantry > 0) fed++;
+    }
+    return fed / world.citizens.length;
   }
 }
 
