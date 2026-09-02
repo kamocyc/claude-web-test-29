@@ -1,6 +1,7 @@
 import {
   GOODS_PER_RESIDENT_PER_DAY,
   SHOPPING_BASKET,
+  SHOPPING_TRIGGER,
   SHOP_CANDIDATES,
   SHOP_HEADROOM,
   SHOP_SEARCH_RADIUS,
@@ -87,12 +88,17 @@ export function buy(shop: Building, c: Citizen): number {
 }
 
 /**
- * How well fed this citizen is, 0..1, for the happiness panel.
+ * How well fed this citizen feels, 0..1.
  *
- * A cupboard with a day left is fine; one that ran out is not, and a wasted
- * trip counts against the city even if the cupboard is not empty yet.
+ * A day's food in the cupboard is *fine* -- this asks whether the household
+ * can buy what it needs, not whether it is hoarding. Scoring it against a full
+ * basket instead made a perfectly supplied city report a third of a mark,
+ * because everybody spends most of the time between shopping trips part-way
+ * through what they bought. A wasted trip still counts against it, because
+ * walking to a shop and finding it bare is exactly the experience this is
+ * supposed to capture.
  */
 export function shoppingSatisfaction(c: Citizen): number {
-  const stocked = Math.min(1, c.pantry / SHOPPING_BASKET);
-  return c.lastShopFailed ? stocked * 0.5 : stocked;
+  const stocked = Math.min(1, c.pantry / SHOPPING_TRIGGER);
+  return c.lastShopFailed ? stocked * 0.6 : stocked;
 }

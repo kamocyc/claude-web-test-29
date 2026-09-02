@@ -2,6 +2,7 @@ import { TravelMode } from '../core/types';
 import type { Simulation } from '../sim/simulation';
 import type { LiveStats, TripStats } from '../sim/statistics';
 import { vacantDwellings } from '../sim/happiness';
+import { ticksToMinutes } from '../core/clock';
 
 /** Rebuilt a few times a second; every frame would be wasted DOM work. */
 const REFRESH_MS = 250;
@@ -46,12 +47,14 @@ export class StatsPanel {
         bar('在宅', live.atHome, live.population, '#5fa8d3'),
         bar('勤務中', live.atWork, live.population, '#e0a458'),
         bar('移動中', live.travelling, live.population, '#3ddc7f'),
-        bar('駅で待ち', live.waiting, live.population, '#c8b6e2'),
+        bar('買い物中', live.shopping, live.population, '#8fc95c'),
+    bar('駅で待ち', live.waiting, live.population, '#c8b6e2'),
         bar('乗車中', live.riding, live.population, '#8f7fd6'),
         bar('経路なし', live.stranded, live.population, '#ff4d5e'),
       ]),
       section('移動手段（外出中）', modeRows(live)),
       wellbeingSection(sim),
+      freightSection(sim),
       citySection(sim),
       section('完了した移動', [
         row('のべ件数', `${trips.completed} 件`),
@@ -75,10 +78,26 @@ function wellbeingSection(sim: Simulation): HTMLElement {
     bar('　住環境', Math.round(h.housing), 100, '#5fa8d3'),
     bar('　通勤', Math.round(h.commute), 100, '#e0a458'),
     bar('　雇用', Math.round(h.employment), 100, '#3ddc7f'),
-    bar('　買い物', Math.round(h.services), 100, '#d99ae0'),
+    bar('　食料', Math.round(h.services), 100, '#d99ae0'),
     bar('　電気', Math.round(h.power), 100, '#f0d24a'),
     row('直近1時間の移住', `+${migration.movedIn} / -${migration.movedOut} 人`),
     row('住宅の空き', `${vacantDwellings(sim.world)} 戸`),
+  ]);
+}
+
+/** The lorries: how much of the city's freight is actually moving. */
+function freightSection(sim: Simulation): HTMLElement {
+  const f = sim.freight.report;
+  const fleet = sim.world.lorries.length;
+  return section('物流', [
+    row('走行中のトラック', `${f.onTheRoad} / ${fleet} 台`),
+    row('輸送中の商品', `${Math.round(f.inTransit)} 単位`),
+    row('本日の配送', `${f.deliveriesToday} 件 ／ ${Math.round(f.deliveredToday)} 単位`),
+    row('平均配送時間', f.meanDeliveryTicks === 0
+      ? '—'
+      : `${Math.round(ticksToMinutes(f.meanDeliveryTicks))} 分`),
+    row('届いていない需要', `${Math.round(f.unmetDemand)} 単位`),
+    row('立ち往生', `${f.stuck} 台`),
   ]);
 }
 
@@ -90,10 +109,10 @@ function citySection(sim: Simulation): HTMLElement {
     row('電力', `需要 ${Math.round(power.demand)} ／ 供給 ${Math.round(power.supply)}`),
     row('　停電中の建物', `${power.unpowered} 件`),
     row('平均地価', `${Math.round(sim.landValue.meanResidential(sim.world))} / 100`),
-    row('商品の供給', `${Math.round(sim.chain.serviceLevel(sim.world) * 100)}%`),
+    row('食料のある世帯', `${Math.round(sim.chain.serviceLevel(sim.world) * 100)}%`),
     row('　一次産業の産出', `${chain.rawProduced.toFixed(0)} / 時`),
     row('　工場の生産', `${chain.goodsProduced.toFixed(0)} / 時`),
-    row('　売れた商品', `${chain.goodsSold.toFixed(0)} / 時`),
+    row('　住民の購入', `${chain.goodsSold.toFixed(0)} / 時`),
     row('　在庫切れの商店', `${chain.shopsEmpty} 軒`),
     row('　原料切れの工場', `${chain.factoriesIdle} 軒`),
   ];

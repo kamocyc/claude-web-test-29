@@ -1,8 +1,9 @@
-import { CAR_FREE_SPEED, TRAIN_CAPACITY } from '../config';
+import { CAR_FREE_SPEED, LORRY_CAPACITY, TRAIN_CAPACITY } from '../config';
 import { ticksToMinutes } from '../core/clock';
 import { tileX, tileY } from '../core/grid';
 import { BuildingType, CitizenState, TravelMode } from '../core/types';
 import type { Citizen } from '../sim/citizen';
+import { CargoKind, LorryState, type Lorry } from '../sim/lorry';
 import { departForHomeMinute, departForWorkMinute } from '../sim/schedule';
 import type { Simulation } from '../sim/simulation';
 import { industryOf, isHome, specFor, type Building } from '../world/buildings';
@@ -23,6 +24,8 @@ export class Inspector {
   selected: Citizen | null = null;
   /** A building the player clicked instead of a citizen. */
   selectedStation: Building | null = null;
+  /** A lorry the player clicked. */
+  selectedLorry: Lorry | null = null;
 
   constructor(root: HTMLElement) {
     root.innerHTML = '';
@@ -48,21 +51,41 @@ export class Inspector {
 
   select(c: Citizen | null): void {
     this.selected = c;
-    if (c) this.selectedStation = null;
+    if (c) {
+      this.selectedStation = null;
+      this.selectedLorry = null;
+    }
   }
 
   selectStation(b: Building | null): void {
     this.selectedStation = b;
-    if (b) this.selected = null;
+    if (b) {
+      this.selected = null;
+      this.selectedLorry = null;
+    }
+  }
+
+  selectLorry(l: Lorry | null): void {
+    this.selectedLorry = l;
+    if (l) {
+      this.selected = null;
+      this.selectedStation = null;
+    }
   }
 
   /** Called after a load, when every id in the panel belongs to an old city. */
   clear(): void {
     this.selected = null;
     this.selectedStation = null;
+    this.selectedLorry = null;
   }
 
   update(sim: Simulation): void {
+    if (this.selectedLorry) {
+      this.title.textContent = 'トラック';
+      this.updateLorry(sim, this.selectedLorry);
+      return;
+    }
     if (this.selectedStation) {
       const b = this.selectedStation;
       this.title.textContent = b.type === BuildingType.Station ? '駅' : BUILDING_LABELS[b.type];
@@ -151,9 +174,44 @@ export class Inspector {
         ['地価', `${Math.round(sim.landValue.at(home.tile))} / 100`],
         ['騒音', `${Math.round(sim.noise.at(home.tile))} / 100`],
         ['電気', home.powered ? '来ている' : '来ていない'],
-        ['買い物', `${Math.round(sim.chain.serviceLevel(world) * 100)}% 供給`],
+        ['食料の備え', `${c.pantry.toFixed(1)} 日分${c.lastShopFailed ? '（前回買えず）' : ''}`],
       ]));
     }
+  }
+
+  /**
+   * One lorry: what it is carrying, where from, where to, and how it is
+   * getting on. The same panel a citizen gets, because a delivery running
+   * late for the same reason a commuter is late is the whole point of
+   * putting the goods on the road.
+   */
+  private updateLorry(sim: Simulation, lorry: Lorry): void {
+    const world = sim.world;
+    const depot = world.buildings[lorry.home];
+    const target = lorry.destination >= 0 ? world.buildings[lorry.destination] : undefined;
+    const spec = lorry.profile;
+
+    const rows: Array<[string, string]> = [
+      ['状態', LORRY_STATE_LABELS[lorry.state]],
+      ['積荷', `${lorry.cargo.toFixed(0)} / ${LORRY_CAPACITY} ${
+        lorry.cargoKind === CargoKind.Raw ? '（原材料）' : '（商品）'}`],
+      ['所属', depot && depot.alive ? `${BUILDING_LABELS[depot.type]} ${address(depot.tile)}` : '—'],
+      ['行き先', target && target.alive
+        ? `${BUILDING_LABELS[target.type]} ${address(target.tile)}`
+        : '—'],
+      ['本日の配送', `${lorry.trips} 件`],
+    ];
+
+    if (lorry.path) {
+      const remaining = lorry.path.length - 1 - lorry.s;
+      rows.push(['残り距離', `${Math.round(remaining)} タイル`]);
+      rows.push(['速度', `${Math.round((lorry.v / spec.freeSpeed) * 100)}%${
+        lorry.blockedTicks > 30 ? '（渋滞で停止中）' : ''}`]);
+    }
+
+    this.body.innerHTML = '';
+    this.body.appendChild(definitionList(rows));
+    if (lorry.path) this.body.appendChild(speedBar(lorry.v / spec.freeSpeed));
   }
 
   /**
@@ -185,6 +243,19 @@ export class Inspector {
       rows.push(['在庫', `${b.goodsStock.toFixed(0)} / ${spec.storage}`]);
       rows.push(['本日の販売', `${b.soldToday.toFixed(0)}`]);
     }
+    // What the lorries are doing for this building. Without this, a player
+    // looking at a factory whose stock left on a truck ten seconds ago would
+    // think the goods had simply vanished.
+    const inbound = sim.world.lorries.filter(
+      (l) => l.destination === b.id && l.cargo > 0,
+    ).reduce((n, l) => n + l.cargo, 0);
+    const outbound = sim.world.lorries.filter((l) => l.home === b.id && l.cargo > 0);
+    if (inbound > 0) rows.push(['入荷予定', `${Math.round(inbound)} 単位`]);
+    if (outbound.length > 0) {
+      rows.push(['出荷中', `${outbound.length} 台 ／ ${
+        Math.round(outbound.reduce((n, l) => n + l.cargo, 0))} 単位`]);
+    }
+
     if (b.starvedHours > 0) {
       rows.push(['稼働できない時間', `${b.starvedHours} 時間`]);
     }
@@ -254,6 +325,15 @@ const BUILDING_LABELS: Record<BuildingType, string> = {
   [BuildingType.Mine]: '鉱山',
   [BuildingType.Station]: '駅',
   [BuildingType.PowerPlant]: '発電所',
+};
+
+const LORRY_STATE_LABELS: Record<LorryState, string> = {
+  [LorryState.Idle]: '待機中',
+  [LorryState.Loading]: '積み込み中',
+  [LorryState.Outbound]: '配送中',
+  [LorryState.Unloading]: '荷降ろし中',
+  [LorryState.Returning]: '帰庫中',
+  [LorryState.Stuck]: '⚠ 経路なし',
 };
 
 function moodNote(c: Citizen): string {

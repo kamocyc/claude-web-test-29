@@ -13,6 +13,8 @@ export interface LiveStats {
   travelling: number;
   waiting: number;
   riding: number;
+  /** In a shop, filling a basket. */
+  shopping: number;
   stranded: number;
   /** Travelling citizens by the mode they chose, riders included. */
   walking: number;
@@ -46,6 +48,7 @@ const EMPTY_LIVE: LiveStats = {
   travelling: 0,
   waiting: 0,
   riding: 0,
+  shopping: 0,
   stranded: 0,
   walking: 0,
   driving: 0,
@@ -103,6 +106,9 @@ export class Statistics {
           break;
         case CitizenState.Riding:
           s.riding++;
+          break;
+        case CitizenState.AtShop:
+          s.shopping++;
           break;
         default:
           s.travelling++;

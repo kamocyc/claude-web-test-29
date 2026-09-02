@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SHOPPING_BASKET, TICKS_PER_DAY } from '../config';
+import { SHOPPING_BASKET, SHOPPING_TRIGGER, TICKS_PER_DAY } from '../config';
 import { CitizenState, Industry, Zone } from '../core/types';
 import { Simulation } from '../sim/simulation';
 import { industryOf } from '../world/buildings';
@@ -93,6 +93,11 @@ describe('shopping trips', () => {
 
     c.pantry = SHOPPING_BASKET;
     c.lastShopFailed = false;
+    expect(shoppingSatisfaction(c)).toBe(1);
+
+    // A day's food is enough to be content; the basket is a stockpile, not a
+    // requirement.
+    c.pantry = SHOPPING_TRIGGER;
     expect(shoppingSatisfaction(c)).toBe(1);
 
     c.lastShopFailed = true;

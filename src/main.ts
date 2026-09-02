@@ -10,6 +10,7 @@ import {
 import { Camera } from './render/camera';
 import { Renderer } from './render/renderer';
 import type { Citizen } from './sim/citizen';
+import type { Lorry } from './sim/lorry';
 import { Simulation } from './sim/simulation';
 import { attachInput } from './ui/input';
 import { Hud } from './ui/hud';
@@ -202,23 +203,44 @@ function selectAt(wx: number, wy: number): void {
   selectNearestCitizen(wx, wy);
 }
 
-/** Clicking picks the closest travelling citizen within a forgiving radius. */
+/**
+ * Clicking picks the closest road user within a forgiving radius -- a lorry
+ * counts, because a delivery running late is as much worth following as a
+ * commuter stuck in the same queue.
+ */
 function selectNearestCitizen(wx: number, wy: number): void {
   const radius = Math.max(1.5, 24 / camera.zoom);
-  let best: Citizen | null = null;
   let bestDist = radius * radius;
+  let bestCitizen: Citizen | null = null;
+  let bestLorry: Lorry | null = null;
+
+  const consider = (x: number, y: number): number => {
+    const dx = x - wx;
+    const dy = y - wy;
+    return dx * dx + dy * dy;
+  };
 
   for (const c of sim.world.citizens) {
     if (isAtRest(c.state)) continue;
-    const dx = c.x - wx;
-    const dy = c.y - wy;
-    const d = dx * dx + dy * dy;
+    const d = consider(c.x, c.y);
     if (d < bestDist) {
       bestDist = d;
-      best = c;
+      bestCitizen = c;
+      bestLorry = null;
     }
   }
-  if (best) inspector.select(best);
+  for (const l of sim.world.lorries) {
+    if (!l.path) continue;
+    const d = consider(l.x, l.y);
+    if (d < bestDist) {
+      bestDist = d;
+      bestLorry = l;
+      bestCitizen = null;
+    }
+  }
+
+  if (bestLorry) inspector.selectLorry(bestLorry);
+  else if (bestCitizen) inspector.select(bestCitizen);
 }
 
 function pickRandomCitizen(): void {

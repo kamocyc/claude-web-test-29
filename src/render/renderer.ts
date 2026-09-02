@@ -1,6 +1,7 @@
 import {
   CAR_FREE_SPEED,
   LANE_OFFSET,
+  LORRY_CAPACITY,
   MAP_SIZE,
   TRAIN_CAPACITY,
   TRAIN_LENGTH,
@@ -17,6 +18,8 @@ import {
   type TileIndex,
 } from '../core/types';
 import { SignalAxis } from '../sim/signals';
+import { CargoKind } from '../sim/lorry';
+import type { RoadAgent } from '../sim/vehicle';
 import { Resource } from '../core/types';
 import type { Citizen } from '../sim/citizen';
 import { tileCenterX, tileCenterY } from '../sim/citizen';
@@ -60,6 +63,7 @@ export class Renderer {
     this.drawLines(sim);
     this.drawSignals(sim, view);
     this.drawAgents(sim, alpha, opts);
+    this.drawLorries(sim, alpha);
     this.drawTrains(sim, alpha);
     this.drawStationBadges(sim);
     this.drawPendingStations(sim, opts);
@@ -434,6 +438,47 @@ export class Renderer {
   }
 
   /**
+   * Freight, drawn as what it is: a longer body with a cab at the front and
+   * the load along the back. An empty lorry on its way home reads as empty,
+   * which is the difference between "the city is busy" and "the city is
+   * running half its lorries for nothing".
+   */
+  private drawLorries(sim: Simulation, alpha: number): void {
+    const { ctx, camera } = this;
+    const z = camera.zoom;
+    if (z < 4) return;
+
+    for (const lorry of sim.world.lorries) {
+      if (!lorry.path) continue;
+      const pose = agentPose(lorry, alpha);
+      const p = camera.worldToScreen(pose.x, pose.y);
+      if (p.x < -12 || p.y < -12 || p.x > camera.viewportWidth + 12
+        || p.y > camera.viewportHeight + 12) {
+        continue;
+      }
+
+      const length = Math.max(5, z * 0.72);
+      const width = Math.max(3, z * 0.32);
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(pose.angle);
+
+      // The trailer, tinted by what it is carrying and how full it is.
+      ctx.fillStyle = COLORS.lorryBody;
+      ctx.fillRect(-length / 2, -width / 2, length, width);
+      const load = Math.min(1, lorry.cargo / LORRY_CAPACITY);
+      if (load > 0) {
+        ctx.fillStyle = lorry.cargoKind === CargoKind.Raw ? COLORS.cargoRaw : COLORS.cargoGoods;
+        ctx.fillRect(-length / 2, -width / 2, length * 0.72 * load, width);
+      }
+      // The cab, so which way it is pointing is never in doubt.
+      ctx.fillStyle = COLORS.lorryCab;
+      ctx.fillRect(length / 2 - length * 0.28, -width / 2, length * 0.28, width);
+      ctx.restore();
+    }
+  }
+
+  /**
    * Signal heads at each junction: two dots on the north/south approaches and
    * two on the east/west ones, so which movement currently holds the green is
    * readable at a glance -- and matches exactly what the cars are obeying,
@@ -546,7 +591,7 @@ interface Pose {
  * The lane offset is that heading turned ninety degrees to the left. Traffic
  * keeps left, so the two directions never overlap on the same tile.
  */
-export function agentPose(c: Citizen, alpha: number): Pose {
+export function agentPose(c: RoadAgent, alpha: number): Pose {
   const x = c.prevX + (c.x - c.prevX) * alpha;
   const y = c.prevY + (c.y - c.prevY) * alpha;
 
@@ -562,7 +607,7 @@ export function agentPose(c: Citizen, alpha: number): Pose {
   };
 }
 
-function headingVector(c: Citizen): { dx: number; dy: number } | null {
+function headingVector(c: RoadAgent): { dx: number; dy: number } | null {
   const path = c.path;
   if (path && path.length >= 2) {
     const seg = Math.min(path.length - 2, Math.max(0, Math.floor(c.s)));

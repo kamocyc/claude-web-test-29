@@ -155,8 +155,14 @@ export class Hud {
     if (sim.power.report.unpowered > 0) {
       return `⚠ ${sim.power.report.unpowered}件の建物に電気が来ていません（発電所か道路の接続が足りません）`;
     }
+    if (sim.freight.report.stuck > 0) {
+      return `⚠ ${sim.freight.report.stuck}台のトラックが立ち往生しています（配送先までの道が繋がっていません）`;
+    }
     if (sim.chain.report.shopsEmpty > 0) {
       return `⚠ ${sim.chain.report.shopsEmpty}軒の商店に売る商品がありません（工業・一次産業と道路で繋いでください）`;
+    }
+    if (sim.freight.report.unmetDemand > 100) {
+      return `⚠ 配送が需要に追いついていません（工業を商店の近くに置くか、道路の渋滞を解消してください）`;
     }
     if (sim.strandedCount > 0) {
       return `⚠ ${sim.strandedCount}人が職場・自宅にたどり着けません（道路が繋がっていません）`;

@@ -47,7 +47,8 @@ describe('citizen statistics', () => {
     for (let i = 0; i < 4000; i++) {
       sim.tick();
       const s = sim.stats.live;
-      const accounted = s.atHome + s.atWork + s.travelling + s.waiting + s.riding + s.stranded;
+      const accounted = s.atHome + s.atWork + s.travelling + s.waiting + s.riding
+        + s.shopping + s.stranded;
       expect(accounted).toBe(sim.world.citizens.length);
       expect(s.population).toBe(sim.world.citizens.length);
     }
