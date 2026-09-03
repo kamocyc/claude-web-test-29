@@ -318,6 +318,7 @@ const OVERLAYS: ReadonlyArray<[Overlay, string, IconName, string]> = [
   ['landValue', '地価', 'overlayLandValue', 'V'],
   ['crime', '治安', 'overlayCrime', 'C'],
   ['services', '公共カバー', 'overlayServices', 'B'],
+  ['height', '標高', 'overlayHeight', 'M'],
 ];
 
 const COST_HINTS: Partial<Record<string, string>> = {
@@ -325,6 +326,8 @@ const COST_HINTS: Partial<Record<string, string>> = {
   rail: '¥120/タイル',
   zone: '¥25/タイル',
   station: '¥4,000',
+  elevatedRoad: '¥700/タイル',
+  elevatedRail: '¥1,500/タイル',
   busStop: '¥900',
   powerPlant: '¥22,000',
   school: '¥30,000',

@@ -12,6 +12,17 @@ const SHOP_REACH = 8;
 const BUS_STOP_REACH = 5;
 
 /**
+ * What standing above the surrounding ground is worth.
+ *
+ * Capped, and worth nothing in a hollow: a tile in a dip is not *penalised*
+ * for it, because the thing being priced is the view, and not having one is
+ * the ordinary case rather than a defect.
+ */
+function viewBonus(prominence: number): number {
+  return Math.min(3, Math.max(0, prominence)) * 5;
+}
+
+/**
  * What a point of crime takes off a tile's value.
  *
  * Slightly less than noise, and for a reason worth stating: noise is
@@ -46,6 +57,8 @@ export interface LandValueFactors {
   water: number;
   /** Standing on wooded ground. */
   greenery: number;
+  /** Standing above the ground around it: a view, and away from the traffic. */
+  view: number;
   /** Being within walking distance of a station. */
   station: number;
   /** ...of shops. */
@@ -72,6 +85,10 @@ export class LandValueField {
     for (let tile = 0; tile < amenity.length; tile++) {
       if (world.map.isWater(tile)) spread(amenity, tile, 10, WATER_REACH);
       else if (world.map.getResource(tile) === Resource.Forest) amenity[tile] += 6;
+      // Higher ground than its surroundings: a view, and above the noise of
+      // whatever is going on in the valley. This is what stops the hills
+      // being purely an obstacle -- the awkward land is also the good land.
+      amenity[tile] += viewBonus(world.map.prominence[tile]);
     }
 
     // Services, from what has been built.
@@ -118,6 +135,7 @@ export class LandValueField {
       if (world.map.isWater(near)) water += 10 * falloff(tile, near, WATER_REACH);
     }
     const greenery = world.map.getResource(tile) === Resource.Forest ? 6 : 0;
+    const view = viewBonus(world.map.prominence[tile]);
 
     let station = 0;
     let shops = 0;
@@ -141,12 +159,15 @@ export class LandValueField {
       base: 40,
       water,
       greenery,
+      view,
       station,
       shops,
       offices,
       noise: -penalty,
       crime: -unsafe,
-      target: clamp(40 + water + greenery + station + shops + offices - penalty - unsafe),
+      target: clamp(
+        40 + water + greenery + view + station + shops + offices - penalty - unsafe,
+      ),
       current: this.at(tile),
     };
   }

@@ -4,6 +4,19 @@ import { Direction, type TileIndex } from '../core/types';
 import type { TileNetwork } from '../world/tileNetwork';
 
 /**
+ * What one step of a route costs, in tiles.
+ *
+ * Uniform by default. The road network passes a gradient-aware cost, which is
+ * not congestion sneaking back in: a hill is slower for everybody, all day,
+ * and it is exactly the sort of thing a driver plans around before setting
+ * off. Congestion stays out, so routes remain cacheable and citizens can
+ * still drive into the jam the player built.
+ */
+export type StepCost = (from: TileIndex, to: TileIndex) => number;
+
+const UNIFORM: StepCost = () => 1;
+
+/**
  * A* over a tile network -- roads or rails, the structure is the same. Costs
  * are free-flow only: congestion is deliberately left out so that routes stay
  * cacheable and citizens can actually get stuck in the jams the player
@@ -13,6 +26,7 @@ export function findPath(
   network: TileNetwork,
   start: TileIndex,
   goal: TileIndex,
+  cost: StepCost = UNIFORM,
 ): TileIndex[] | null {
   if (start < 0 || goal < 0) return null;
   if (!network.has(start) || !network.has(goal)) return null;
@@ -49,7 +63,7 @@ export function findPath(
       const next = neighbor(current, dir as Direction);
       if (next < 0 || closed.has(next)) continue;
 
-      const tentative = g + 1;
+      const tentative = g + cost(current, next);
       if (tentative < (gScore.get(next) ?? Infinity)) {
         cameFrom.set(next, current);
         gScore.set(next, tentative);

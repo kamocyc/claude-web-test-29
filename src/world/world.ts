@@ -1,4 +1,13 @@
-import { MAP_SIZE } from '../config';
+import { CAR_PROFILE, TRAIN_PROFILE } from '../sim/carFollowing';
+import { gradeStepCost } from '../sim/gradient';
+import type { StepCost } from '../sim/pathfinding';
+import {
+  MAP_SIZE,
+  MAX_BUILD_RELIEF,
+  MAX_RAISE,
+  MAX_RAIL_STEP,
+  MAX_TERRAIN_HEIGHT,
+} from '../config';
 import { idx, neighbors } from '../core/grid';
 import { Rng } from '../core/rng';
 import {
@@ -36,6 +45,9 @@ import {
   type Train,
 } from './transit';
 
+/** How wide the river's valley is, in tiles either side of the water. */
+const VALLEY_WIDTH = 14;
+
 export class World {
   readonly map = new TileMap();
   readonly roads: TileNetwork;
@@ -71,6 +83,25 @@ export class World {
    */
   nextCitizenSeed = 0;
 
+  /**
+   * What one step of road costs a driver, with the hill in it.
+   *
+   * Held as a field rather than passed around so that every road search in
+   * the game -- commuters, lorries, buses, fire engines -- prices a gradient
+   * the same way. A route that avoids the hill is not a special case anybody
+   * has to remember to ask for.
+   */
+  readonly roadStep: StepCost = (from, to) => gradeStepCost(
+    this.map.roadHeight(to) - this.map.roadHeight(from),
+    CAR_PROFILE.gradeSensitivity,
+  );
+
+  /** The same for track, which loses more of its speed to a climb than a car. */
+  readonly railStep: StepCost = (from, to) => gradeStepCost(
+    this.map.railHeight(to) - this.map.railHeight(from),
+    TRAIN_PROFILE.gradeSensitivity,
+  );
+
   constructor(seed = 1) {
     this.rng = new Rng(seed);
     this.roads = new TileNetwork((t) => this.map.isRoad(t));
@@ -95,7 +126,101 @@ export class World {
         if (px >= 0 && px < MAP_SIZE) t[idx(px, y)] = Terrain.Water;
       }
     }
+    this.generateHeight(river);
     this.generateResources(river);
+    this.map.refreshRelief();
+  }
+
+  /**
+   * The lie of the land: rolling ground from a few octaves of value noise,
+   * cut through by the valley the river runs in.
+   *
+   * Two properties are being aimed for rather than realism. Most of the map
+   * has to be *gently* sloped, because a city that cannot be built anywhere
+   * is not a city builder; and a few places have to be genuinely steep, so
+   * that a railway alignment is a decision and a viaduct is worth its price.
+   * Quantising a smooth field to whole levels gives both for free: contour
+   * lines spread out over the flats and bunch into a step of two or three
+   * where the field is steep.
+   */
+  private generateHeight(river: number[]): void {
+    const field = new Float32Array(MAP_SIZE * MAP_SIZE);
+    for (const [cells, amplitude] of [[4, 1], [8, 0.5], [16, 0.22]] as const) {
+      this.addNoise(field, cells, amplitude);
+    }
+
+    let low = Infinity;
+    let high = -Infinity;
+    for (const v of field) {
+      low = Math.min(low, v);
+      high = Math.max(high, v);
+    }
+    const span = Math.max(1e-6, high - low);
+
+    for (let y = 0; y < MAP_SIZE; y++) {
+      for (let x = 0; x < MAP_SIZE; x++) {
+        const tile = idx(x, y);
+        let v = (field[tile] - low) / span;
+
+        // The river is at the bottom of a valley, and the valley floor is
+        // wide enough to build a town on. Without this the water would run
+        // along a hillside, which reads as broken however pretty the noise is.
+        const toRiver = Math.abs(x - river[y]);
+        if (toRiver < VALLEY_WIDTH) {
+          const t = toRiver / VALLEY_WIDTH;
+          v *= t * t * (3 - 2 * t);
+        }
+        this.map.height[tile] = this.map.isWater(tile)
+          ? 0
+          : Math.max(0, Math.min(MAX_TERRAIN_HEIGHT, Math.round(v * MAX_TERRAIN_HEIGHT)));
+      }
+    }
+  }
+
+  /** One octave of value noise: a coarse lattice, smoothly interpolated. */
+  private addNoise(field: Float32Array, cells: number, amplitude: number): void {
+    const lattice = new Float32Array((cells + 1) * (cells + 1));
+    for (let i = 0; i < lattice.length; i++) lattice[i] = this.rng.next();
+
+    const step = MAP_SIZE / cells;
+    const fade = (t: number): number => t * t * (3 - 2 * t);
+
+    for (let y = 0; y < MAP_SIZE; y++) {
+      const gy = Math.min(cells - 1, Math.floor(y / step));
+      const fy = fade(y / step - gy);
+      for (let x = 0; x < MAP_SIZE; x++) {
+        const gx = Math.min(cells - 1, Math.floor(x / step));
+        const fx = fade(x / step - gx);
+
+        const a = lattice[gy * (cells + 1) + gx];
+        const b = lattice[gy * (cells + 1) + gx + 1];
+        const c = lattice[(gy + 1) * (cells + 1) + gx];
+        const d = lattice[(gy + 1) * (cells + 1) + gx + 1];
+        const top = a + (b - a) * fx;
+        const bottom = c + (d - c) * fx;
+        field[idx(x, y)] += (top + (bottom - top) * fy) * amplitude;
+      }
+    }
+  }
+
+  /**
+   * Level a rectangle of ground.
+   *
+   * Cities are built on levelled sites, and the opening scenario needs one:
+   * a town laid out on whatever the noise happened to produce would have its
+   * streets refused halfway along. It is deliberately *not* offered to the
+   * player as a tool -- terraforming would make every height in the map a
+   * suggestion, and the point of the heights is that they are a constraint.
+   */
+  levelGround(x0: number, y0: number, x1: number, y1: number, height: number): void {
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const tile = this.map.at(x, y);
+        if (tile < 0 || this.map.isWater(tile)) continue;
+        this.map.height[tile] = height;
+      }
+    }
+    this.map.refreshRelief();
   }
 
   /**
@@ -171,8 +296,78 @@ export class World {
     if (this.map.terrain[tile] === Terrain.Water) return false;
     if (this.map.rail[tile] === 1) return false;
     if (this.map.building[tile] !== -1) return false;
+    if (!this.railGradeAllows(tile, 0)) return false;
 
     this.map.rail[tile] = 1;
+    this.map.railRaise[tile] = 0;
+    this.map.zone[tile] = Zone.None;
+    this.rails.update(tile);
+    return true;
+  }
+
+  /**
+   * Whether track may sit at this height here, given the track around it.
+   *
+   * The one hard gradient rule in the game. A road can climb anything badly;
+   * a railway cannot climb at all beyond a level per tile, so a line either
+   * follows the contours, goes the long way round, or is carried over the
+   * ground -- which is the decision this rule exists to force.
+   */
+  railGradeAllows(tile: TileIndex, raise: number): boolean {
+    const here = this.map.height[tile] + raise;
+    for (const n of neighbors(tile)) {
+      if (!this.map.isRail(n)) continue;
+      if (Math.abs(this.map.railHeight(n) - here) > MAX_RAIL_STEP) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Carry a road one level higher here, laying it first if there is none.
+   *
+   * This is the whole elevated-structure interaction: one tool, applied
+   * repeatedly. A single level clears the track underneath, so a flyover is
+   * one pass; a second level clears a viaduct that is already there. Over
+   * water it is a bridge, and it is the only way this city has ever had of
+   * getting to the far bank.
+   */
+  raiseRoad(tile: TileIndex): boolean {
+    if (tile < 0) return false;
+    if (this.map.building[tile] !== -1) return false;
+    if (this.map.roadRaise[tile] >= MAX_RAISE) return false;
+
+    if (this.map.road[tile] === 1) {
+      this.map.roadRaise[tile]++;
+      // The network is unchanged, but what it costs to drive over this tile is
+      // not: bumping the version drops the path cache, which prices gradients.
+      this.roads.update(tile);
+      return true;
+    }
+    // A new structure starts one level up: on the ground it would be an
+    // ordinary road, and the ordinary road tool is cheaper.
+    this.map.road[tile] = 1;
+    this.map.roadRaise[tile] = 1;
+    this.map.zone[tile] = Zone.None;
+    this.roads.update(tile);
+    return true;
+  }
+
+  /** The same for track, which additionally has a gradient to answer to. */
+  raiseRail(tile: TileIndex): boolean {
+    if (tile < 0) return false;
+    if (this.map.building[tile] !== -1) return false;
+    if (this.map.railRaise[tile] >= MAX_RAISE) return false;
+
+    const raise = this.map.railRaise[tile] + 1;
+    if (!this.railGradeAllows(tile, raise)) return false;
+
+    if (this.map.rail[tile] === 1) {
+      this.map.railRaise[tile] = raise;
+      this.rails.update(tile);
+      return true;
+    }
+    this.map.rail[tile] = 1;
+    this.map.railRaise[tile] = 1;
     this.map.zone[tile] = Zone.None;
     this.rails.update(tile);
     return true;
@@ -194,6 +389,9 @@ export class World {
     if (tile < 0) return false;
     if (!this.map.isBuildable(tile)) return false;
     if (this.adjacentRoad(tile) < 0) return false;
+    // Buildings need a level plot. On gentle ground this never bites; on an
+    // escarpment it is what keeps the hillside green.
+    if (this.map.relief(tile) > MAX_BUILD_RELIEF) return false;
     return groundSupports(this.map, zone, tile);
   }
 
@@ -257,6 +455,7 @@ export class World {
   removeRail(tile: TileIndex): boolean {
     if (tile < 0 || this.map.rail[tile] !== 1) return false;
     this.map.rail[tile] = 0;
+    this.map.railRaise[tile] = 0;
     this.rails.update(tile);
     this.invalidateLinesUsing(tile);
     return true;
@@ -273,12 +472,14 @@ export class World {
     }
     if (this.map.road[tile] === 1) {
       this.map.road[tile] = 0;
+      this.map.roadRaise[tile] = 0;
       this.roads.update(tile);
       this.repairRoadLines(tile);
       changed = true;
     }
     if (this.map.rail[tile] === 1) {
       this.map.rail[tile] = 0;
+      this.map.railRaise[tile] = 0;
       this.rails.update(tile);
       this.invalidateLinesUsing(tile);
       changed = true;
@@ -290,11 +491,21 @@ export class World {
     return changed;
   }
 
+  /**
+   * The road a building's occupants come and go by.
+   *
+   * Ground level is preferred over a viaduct: a front door opening onto the
+   * middle of a flyover is not a front door, and the tile beside it usually
+   * has an ordinary street on it.
+   */
   adjacentRoad(tile: TileIndex): TileIndex {
+    let raised = -1;
     for (const n of neighbors(tile)) {
-      if (this.map.isRoad(n)) return n;
+      if (!this.map.isRoad(n)) continue;
+      if (this.map.roadRaise[n] === 0) return n;
+      if (raised < 0) raised = n;
     }
-    return -1;
+    return raised;
   }
 
   adjacentRail(tile: TileIndex): TileIndex {
@@ -542,6 +753,7 @@ export class World {
   }
 
   private invalidateLinesUsing(tile: TileIndex): void {
+    if (tile < 0) return;
     for (const line of this.lines) {
       if (line.route.includes(tile)) this.removeLine(line.id);
     }

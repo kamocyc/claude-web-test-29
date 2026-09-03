@@ -8,11 +8,13 @@ import { CAR_DECEL_MAX } from '../config';
 import { axisOf, SignalAxis, Signals } from '../sim/signals';
 import { Simulation } from '../sim/simulation';
 import { World } from '../world/world';
+import { flatten } from './helpers';
 
 /** A plus-shaped junction at (20, 20), plus a bare corner at (30, 30). */
 function junctionWorld(): World {
   const w = new World(7);
   w.map.terrain.fill(0);
+  flatten(w);
 
   for (let x = 16; x <= 24; x++) w.placeRoad(idx(x, 20));
   for (let y = 16; y <= 24; y++) w.placeRoad(idx(20, y));

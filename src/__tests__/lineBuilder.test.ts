@@ -4,6 +4,7 @@ import { Terrain, type BuildingId } from '../core/types';
 import { findPath } from '../sim/pathfinding';
 import { createLineThrough } from '../world/lineBuilder';
 import { World } from '../world/world';
+import { flatten } from './helpers';
 
 /**
  * Two isolated station sites: a road with a stub of track beside it, twice,
@@ -13,6 +14,7 @@ import { World } from '../world/world';
 function twoIslands(): { world: World; stations: BuildingId[] } {
   const world = new World(5);
   world.map.terrain.fill(Terrain.Grass);
+  flatten(world);
 
   const stations: BuildingId[] = [];
   for (const [x, y] of [[20, 20], [60, 40]] as const) {
@@ -82,6 +84,7 @@ describe('building a line through chosen stations', () => {
   it('runs the new track through every station in the order they were picked', () => {
     const world = new World(11);
     world.map.terrain.fill(Terrain.Grass);
+    flatten(world);
 
     const stations: BuildingId[] = [];
     for (const [x, y] of [[20, 20], [50, 20], [50, 60]] as const) {
@@ -116,6 +119,7 @@ describe('stations without track', () => {
   function trackless(): { world: World; stations: BuildingId[] } {
     const world = new World(3);
     world.map.terrain.fill(Terrain.Grass);
+    flatten(world);
     for (let x = 10; x <= 70; x++) world.placeRoad(idx(x, 30));
 
     const stations: BuildingId[] = [];

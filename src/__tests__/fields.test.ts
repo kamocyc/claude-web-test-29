@@ -4,7 +4,7 @@ import { idx } from '../core/grid';
 import { BuildingType, Terrain } from '../core/types';
 import { Simulation } from '../sim/simulation';
 import { World } from '../world/world';
-import { compactCity, run } from './helpers';
+import { compactCity, flatten, run } from './helpers';
 
 /**
  * Two districts that share no road, so nothing can flow between them: the
@@ -13,6 +13,7 @@ import { compactCity, run } from './helpers';
 function twoIslands(): World {
   const w = new World(5);
   w.map.terrain.fill(Terrain.Grass);
+  flatten(w);
 
   for (const band of [[10, 24], [50, 64]]) {
     for (let x = band[0]; x <= band[1]; x++) w.placeRoad(idx(x, 20));

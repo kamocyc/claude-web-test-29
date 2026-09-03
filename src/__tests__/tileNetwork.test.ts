@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { idx } from '../core/grid';
 import { Direction } from '../core/types';
 import { World } from '../world/world';
+import { flatten } from './helpers';
 
 function flatWorld(): World {
   const w = new World(7);
-  w.map.terrain.fill(0); // drop the river so tests are about roads only
+  w.map.terrain.fill(0);
+  flatten(w); // drop the river so tests are about roads only
   return w;
 }
 

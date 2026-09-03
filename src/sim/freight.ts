@@ -244,7 +244,7 @@ export class Freight {
       if (s.accessRoad < 0) continue;
 
       const roads = cache.get(world.roads, `${s.accessRoad}:${consumer.accessRoad}`, () =>
-        findPath(world.roads, s.accessRoad, consumer.accessRoad),
+        findPath(world.roads, s.accessRoad, consumer.accessRoad, world.roadStep),
       );
       if (!roads) continue;
 

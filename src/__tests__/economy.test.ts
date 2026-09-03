@@ -5,12 +5,13 @@ import { BuildingType, Resource, Zone } from '../core/types';
 import { Expense } from '../sim/economy';
 import { Simulation } from '../sim/simulation';
 import { World } from '../world/world';
-import { compactCity, run } from './helpers';
+import { flatten, compactCity, run } from './helpers';
 
 describe('money', () => {
   it('charges for what gets built, and refuses what cannot be paid for', () => {
     const world = new World(4);
     world.map.terrain.fill(0);
+    flatten(world);
     const sim = new Simulation(world);
 
     const before = sim.economy.balance;
@@ -28,6 +29,7 @@ describe('money', () => {
   it('bills upkeep for infrastructure every day, whether or not it can pay', () => {
     const world = new World(5);
     world.map.terrain.fill(0);
+    flatten(world);
     for (let x = 5; x <= 60; x++) world.placeRoad(idx(x, 20));
     const sim = new Simulation(world);
     sim.economy.balance = 0;
@@ -149,6 +151,7 @@ describe('the supply chain', () => {
   it('cannot zone primary industry where the ground does not support it', () => {
     const world = new World(9);
     world.map.terrain.fill(0);
+    flatten(world);
     world.map.resource.fill(Resource.None);
     for (let x = 5; x <= 20; x++) world.placeRoad(idx(x, 20));
 
@@ -166,6 +169,7 @@ describe('the supply chain', () => {
   it('puts a fishery on the shore and nowhere else', () => {
     const world = new World(10);
     world.map.terrain.fill(0);
+    flatten(world);
     for (let x = 5; x <= 20; x++) world.placeRoad(idx(x, 20));
     world.map.terrain[idx(10, 22)] = 1;
 

@@ -4,12 +4,13 @@ import { idx } from '../core/grid';
 import { BuildingType, Zone } from '../core/types';
 import { Simulation } from '../sim/simulation';
 import { World } from '../world/world';
-import { compactCity, run } from './helpers';
+import { compactCity, flatten, run } from './helpers';
 
 /** Two road networks that do not touch, with a plant on the left one only. */
 function splitTown(): World {
   const w = new World(17);
   w.map.terrain.fill(0);
+  flatten(w);
 
   for (let x = 5; x <= 25; x++) w.placeRoad(idx(x, 20));
   for (let x = 60; x <= 80; x++) w.placeRoad(idx(x, 20));

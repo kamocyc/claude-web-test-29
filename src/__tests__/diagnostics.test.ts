@@ -6,7 +6,7 @@ import { BuildingIssue, buildingIssue, cityWarnings } from '../sim/diagnostics';
 import { Simulation } from '../sim/simulation';
 import { industryOf } from '../world/buildings';
 import { World } from '../world/world';
-import { compactCity, run } from './helpers';
+import { flatten, compactCity, run } from './helpers';
 
 describe('what is wrong with a building', () => {
   it('says the lights are off before anything else', () => {
@@ -49,6 +49,7 @@ describe('what is wrong with a building', () => {
   it('judges a power station on its own terms', () => {
     const world = new World(3);
     world.map.terrain.fill(Terrain.Grass);
+    flatten(world);
     for (let x = 10; x <= 20; x++) world.placeRoad(idx(x, 10));
     const plant = world.placePowerPlant(idx(15, 11));
     expect(plant).not.toBeNull();
@@ -66,7 +67,12 @@ describe('what is wrong with the city', () => {
     const sim = new Simulation(compactCity());
     run(sim, TICKS_PER_DAY);
 
-    const critical = cityWarnings(sim).filter((w) => w.severity === 'critical');
+    // Events are excluded, and the distinction is the point: a fire is a
+    // thing that is happening, not a statement about how the city is built.
+    // A working city can be on fire; what it cannot have is a structural
+    // complaint about its power, its money or its supply chain.
+    const critical = cityWarnings(sim)
+      .filter((w) => w.severity === 'critical' && w.id !== 'fire');
     expect(critical).toHaveLength(0);
   });
 

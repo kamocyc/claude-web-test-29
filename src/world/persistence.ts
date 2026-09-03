@@ -19,7 +19,7 @@ import type { Building } from './buildings';
 import type { LineMode, TransitLine, Train } from './transit';
 import { World } from './world';
 
-export const SAVE_VERSION = 5;
+export const SAVE_VERSION = 6;
 export const SAVE_KEY = 'city-sim.save';
 
 /**
@@ -66,6 +66,10 @@ export interface SaveData {
   rail: string;
   zone: string;
   resource: string;
+  /** The lie of the land, and what has been carried above it. */
+  height: string;
+  roadRaise: string;
+  railRaise: string;
   buildings: SavedBuilding[];
   citizens: SavedCitizen[];
   lines: SavedLine[];
@@ -91,6 +95,8 @@ interface SavedBuilding {
   cap: number;
   occ: number[];
   alive: boolean;
+  /** Whether the last grid solve reached this building. See the load below. */
+  powered: boolean;
   raw: number;
   goods: number;
   sold: number;
@@ -235,6 +241,9 @@ export function serialize(sim: Simulation): SaveData {
     rail: encodeBytes(world.map.rail),
     zone: encodeBytes(world.map.zone),
     resource: encodeBytes(world.map.resource),
+    height: encodeBytes(world.map.height),
+    roadRaise: encodeBytes(world.map.roadRaise),
+    railRaise: encodeBytes(world.map.railRaise),
     buildings: world.buildings.map(saveBuilding),
     citizens: world.citizens.map(saveCitizen),
     lines: world.lines.map(saveLine),
@@ -259,6 +268,7 @@ function saveBuilding(b: Building): SavedBuilding {
     cap: b.capacity,
     occ: b.occupants.slice(),
     alive: b.alive,
+    powered: b.powered,
     raw: b.rawStock,
     goods: b.goodsStock,
     sold: b.soldToday,
@@ -406,6 +416,12 @@ export function deserialize(data: SaveData): Simulation {
   decodeBytes(data.rail, map.rail);
   decodeBytes(data.zone, map.zone);
   decodeBytes(data.resource, map.resource);
+  decodeBytes(data.height, map.height);
+  decodeBytes(data.roadRaise, map.roadRaise);
+  decodeBytes(data.railRaise, map.railRaise);
+  // Prominence and hill shading are derived from the heights, so they are
+  // recomputed rather than stored -- the same rule the power grid follows.
+  map.refreshRelief();
   map.building.fill(-1);
   world.roads.rebuildAll();
   world.rails.rebuildAll();
@@ -603,12 +619,22 @@ export function deserialize(data: SaveData): Simulation {
   sim.landValue.restore(decodeFloatField(data.landValue));
   sim.crime.restore(decodeFloatField(data.crime));
   sim.emergency.restore(data.incidents ?? []);
-  // Power is not saved: it is a pure function of the city, and the first slow
-  // tick after loading recomputes it before anything can read it. Civic
-  // coverage is the same kind of thing and is recomputed here for the same
-  // reason -- a panel opened before the first slow tick would otherwise say
-  // the schools reach nobody.
+  // Power is *nearly* a pure function of the city, and the difference is what
+  // a save has to carry: the grid is re-solved every half sim-hour, so a
+  // building put up since the last solve is legitimately dark until the next
+  // one. Re-solving on load would light it early, and a resumed city would
+  // quietly stop being the city that was saved -- its factories would produce
+  // and its lorries would be dispatched differently within the hour.
+  //
+  // So the solve below is only for the report the panel shows; the flags it
+  // writes are then replaced by the ones the save carries.
   sim.power.update(world);
+  data.buildings.forEach((b, id) => {
+    world.buildings[id].powered = b.powered;
+  });
+  // Civic coverage genuinely is derived, and is recomputed here so that a
+  // panel opened before the first slow tick does not claim the schools reach
+  // nobody.
   sim.services.update(world);
 
   // Anyone whose routing request was still queued when the save was taken

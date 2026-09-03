@@ -6,7 +6,7 @@ import { Occupancy } from '../sim/occupancy';
 import { Simulation } from '../sim/simulation';
 import { createLine } from '../world/lineBuilder';
 import { World } from '../world/world';
-import { powerTown } from './helpers';
+import { flatten, powerTown } from './helpers';
 
 /**
  * Two clusters at opposite ends of a long corridor: housing in the west, jobs
@@ -17,6 +17,7 @@ import { powerTown } from './helpers';
 function railTown(withRail: boolean): World {
   const w = new World(31);
   w.map.terrain.fill(0);
+  flatten(w);
 
   const y = 30;
   const WEST = 10;

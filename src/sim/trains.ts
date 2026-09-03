@@ -3,6 +3,7 @@ import { type TransitLine, type Train } from '../world/transit';
 import type { World } from '../world/world';
 import { serveStop } from './boarding';
 import { desiredSpeed, stepSpeed, TRAIN_PROFILE } from './carFollowing';
+import { gradeSpeedFactor } from './gradient';
 import { tileCenterX, tileCenterY } from './citizen';
 
 /**
@@ -29,10 +30,14 @@ export function advanceTrain(world: World, train: Train, tick: number): void {
   const toStop = distanceToNextStop(line, train, lap);
   const gap = gapToTrainAhead(world, line, train, lap);
 
+  // A train labours up its gradient like everything else. The limit of one
+  // level per tile keeps this from ever being crippling; what is left is the
+  // reason a line that follows the contours beats one that goes over the hill.
+  const free = TRAIN_FREE_SPEED * routeGradeFactor(world, line, train.s);
   train.v = stepSpeed(
     train.v,
-    desiredSpeed(TRAIN_FREE_SPEED, gap, toStop, TRAIN_PROFILE),
-    TRAIN_FREE_SPEED,
+    desiredSpeed(free, gap, toStop, TRAIN_PROFILE),
+    free,
     TRAIN_PROFILE,
   );
 
@@ -50,6 +55,14 @@ export function advanceTrain(world: World, train: Train, tick: number): void {
   train.s += train.v;
   if (train.s >= lap) train.s -= lap;
   setTrainPosition(line, train);
+}
+
+/** What the climb on the step a train is currently taking does to its speed. */
+function routeGradeFactor(world: World, line: TransitLine, s: number): number {
+  const seg = Math.min(line.route.length - 2, Math.floor(s));
+  if (seg < 0) return 1;
+  const climb = world.map.railHeight(line.route[seg + 1]) - world.map.railHeight(line.route[seg]);
+  return gradeSpeedFactor(climb, TRAIN_PROFILE.gradeSensitivity);
 }
 
 /** Snap distance for the last sliver, so braking cannot asymptote forever. */

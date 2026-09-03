@@ -10,10 +10,12 @@ import { BuildingType, type BuildingId } from '../core/types';
 import { createLine, layoutRoute } from '../world/lineBuilder';
 import { expectedWaitTicks, lapTicks, rideTicks, stopsFor } from '../world/transit';
 import { World } from '../world/world';
+import { flatten } from './helpers';
 
 function flatWorld(): World {
   const w = new World(5);
   w.map.terrain.fill(0);
+  flatten(w);
   return w;
 }
 

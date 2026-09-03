@@ -20,6 +20,13 @@ const ICONS = {
     '<path d="M5 3v18M19 3v18"/><path d="M12 4v3.4M12 10.3v3.4M12 16.6v3.4"/>',
   rail:
     '<path d="M9 3v18M15 3v18"/><path d="M5.5 7h13M5.5 12h13M5.5 17h13"/>',
+  // A deck on piers, with the ground line under it: the same road, carried.
+  elevatedRoad:
+    '<path d="M2.5 9.5h19"/><path d="M6 9.5v8M18 9.5v8"/><path d="M2.5 20.5h19"/>'
+    + '<path d="M2.5 6.5h19"/><path d="M12 6.5v3"/>',
+  elevatedRail:
+    '<path d="M2.5 10.5h19"/><path d="M6 10.5v7M18 10.5v7"/><path d="M2.5 20.5h19"/>'
+    + '<path d="M8 3.5v6M16 3.5v6"/><path d="M5 5.5h14M5 8h14"/>',
   station:
     '<rect x="5" y="3.5" width="14" height="13" rx="2.5"/><path d="M5 9.8h14"/>'
     + '<path d="M8.6 13.2h1.2M14.2 13.2h1.2"/><path d="M8.5 16.5 6.5 20.5M15.5 16.5l2 4"/>'
@@ -85,6 +92,11 @@ const ICONS = {
     + '<circle cx="7.6" cy="18.4" r="1.5"/><circle cx="16.4" cy="18.4" r="1.5"/>',
   overlayPower:
     '<path fill="currentColor" stroke="none" d="M13.6 2 6 13.6h4.4L9.2 22 18 10.4h-4.6z"/>',
+  // Contours: the one drawing that says "height" without needing a legend.
+  overlayHeight:
+    '<path d="M2.5 17.5c4-5 7-5 10.5-1s6 3.5 8.5-1.5"/>'
+    + '<path d="M2.5 12.5c4-5 7-5 10.5-1s6 3.5 8.5-1.5"/>'
+    + '<path d="M6 7.5c2.5-2.5 5-2.5 7 0s4 2.5 6 0"/>',
   overlayCrime:
     '<path d="M12 3.2 19.5 6v6c0 4-3.2 7.2-7.5 8.8C7.7 19.2 4.5 16 4.5 12V6z"/>'
     + '<path d="M9.4 11.6a2.6 2.6 0 0 1 5.2 0"/><path d="M12 14.2v2"/>',

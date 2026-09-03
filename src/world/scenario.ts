@@ -4,6 +4,9 @@ import { findPath } from '../sim/pathfinding';
 import { createLine } from './lineBuilder';
 import { World } from './world';
 
+/** The level the opening town's site is graded to, out of MAX_TERRAIN_HEIGHT. */
+const TOWN_HEIGHT = 2;
+
 /** The seed the game starts a new city from, so a test can start the same one. */
 export const STARTING_SEED = 20260831;
 
@@ -40,6 +43,13 @@ export function seedStartingTown(world: World): void {
   const height = 40;
   const west = { x: 60, w: 25 };
   const east = { x: 99, w: 25 };
+
+  // The site is levelled before a single street is laid, which is what towns
+  // do and what this one needs: a grid laid across whatever the noise
+  // produced would have its railway refused halfway along, and the opening
+  // scenario has to be a city that works. The ground outside this rectangle
+  // is left as it was found -- that is where the player meets the hills.
+  world.levelGround(west.x - 3, top - 3, east.x + east.w + 4, top + height + 3, TOWN_HEIGHT);
   // Two rows clear of the street at top+20: a station needs a free tile that
   // touches track on one side and pavement on the other, and that gap is the
   // only place such a tile exists.

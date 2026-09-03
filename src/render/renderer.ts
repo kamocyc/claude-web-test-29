@@ -1,6 +1,8 @@
 import {
   BUS_CAPACITY,
   CAR_FREE_SPEED,
+  MAX_TERRAIN_HEIGHT,
+  RAISE_DRAW_HEIGHT,
   LANE_OFFSET,
   LORRY_CAPACITY,
   MAP_SIZE,
@@ -30,7 +32,7 @@ import { Resource } from '../core/types';
 import type { Citizen } from '../sim/citizen';
 import { tileCenterX, tileCenterY } from '../sim/citizen';
 import type { Simulation } from '../sim/simulation';
-import { COLORS, speedColor, valueColor } from './palette';
+import { COLORS, heightColor, speedColor, valueColor } from './palette';
 import type { Camera } from './camera';
 import type { Train } from '../world/transit';
 
@@ -42,7 +44,8 @@ export type Overlay =
   | 'noise'
   | 'landValue'
   | 'crime'
-  | 'services';
+  | 'services'
+  | 'height';
 
 export interface RenderOptions {
   showZones: boolean;
@@ -64,6 +67,8 @@ export class Renderer {
   private readonly issueBadges: Array<{ issue: BuildingIssue; x: number; y: number }> = [];
   /** Buildings with something happening to them right now: a fire, a burglary. */
   private readonly alarmBadges: Array<{ kind: IncidentKind; x: number; y: number }> = [];
+  /** Viaducts and bridges seen while drawing tiles, to be drawn over them. */
+  private readonly raised: Array<{ tile: TileIndex; x: number; y: number }> = [];
 
   constructor(
     private readonly ctx: CanvasRenderingContext2D,
@@ -82,7 +87,9 @@ export class Renderer {
     this.stationBadges.length = 0;
     this.issueBadges.length = 0;
     this.alarmBadges.length = 0;
+    this.raised.length = 0;
     this.drawTiles(sim, view, opts);
+    this.drawRaised(sim);
     this.drawLines(sim);
     this.drawSignals(sim, view);
     this.drawAgents(sim, alpha, opts);
@@ -119,21 +126,31 @@ export class Renderer {
         // +1 avoids hairline seams between tiles at fractional zoom levels.
         const size = z + 1;
 
+        // What is on the ground here. Anything carried above it is held back
+        // and drawn afterwards, over the buildings, with its shadow -- which
+        // is the only way a flyover reads as passing over rather than through.
+        const onGround = map.road[i] === 1 && map.roadRaise[i] === 0;
+        const trackOnGround = map.rail[i] === 1 && map.railRaise[i] === 0;
         if (map.terrain[i] === Terrain.Water) {
           ctx.fillStyle = COLORS.water;
-        } else if (map.road[i] === 1) {
+        } else if (onGround) {
           ctx.fillStyle = COLORS.road;
-        } else if (map.rail[i] === 1) {
+        } else if (trackOnGround) {
           ctx.fillStyle = COLORS.rail;
         } else {
-          ctx.fillStyle = groundColor(map.resource[i] as Resource, x, y);
+          // Hill shading is baked into the map, so the ground reads as ground
+          // rather than as a flat colour with a height number attached.
+          ctx.fillStyle = shaded(groundColor(map.resource[i] as Resource, x, y), map.shade[i]);
         }
         ctx.fillRect(p.x, p.y, size, size);
         if (map.road[i] === 0 && map.rail[i] === 0 && map.building[i] === -1) {
           this.drawGroundDetail(map.resource[i] as Resource, p.x, p.y, z, i);
         }
-        if (map.rail[i] === 1 && z >= 7) this.drawSleepers(p.x, p.y, z);
+        if (trackOnGround && z >= 7) this.drawSleepers(p.x, p.y, z);
         if (map.isCrossing(i)) this.drawCrossing(sim, i, p.x, p.y, z);
+        if (map.roadRaise[i] > 0 || map.railRaise[i] > 0) {
+          this.raised.push({ tile: i, x: p.x, y: p.y });
+        }
 
         const bid = map.building[i];
         if (bid !== -1) {
@@ -271,6 +288,13 @@ export class Renderer {
         ctx.fillStyle = valueColor(value / 100);
         break;
       }
+      case 'height': {
+        // The ground itself is already shaded; this paints the levels flat so
+        // the contours can be read off rather than felt.
+        ctx.globalAlpha = 0.5;
+        ctx.fillStyle = heightColor(sim.world.map.height[tile] / MAX_TERRAIN_HEIGHT);
+        break;
+      }
       case 'crime': {
         const level = sim.crime.at(tile);
         if (level < 1) return;
@@ -327,6 +351,7 @@ export class Renderer {
 
       const pose = agentPose(c, alpha);
       const p = camera.worldToScreen(pose.x, pose.y);
+      p.y -= liftAt(sim, pose.x, pose.y, z);
       if (p.x < -8 || p.y < -8 || p.x > camera.viewportWidth + 8 || p.y > camera.viewportHeight + 8) {
         continue;
       }
@@ -482,6 +507,7 @@ export class Renderer {
       const x = train.prevX + (train.x - train.prevX) * alpha;
       const y = train.prevY + (train.y - train.prevY) * alpha;
       const p = camera.worldToScreen(x, y);
+      p.y -= liftAt(sim, x, y, z, true);
       if (p.x < -30 || p.y < -30 || p.x > camera.viewportWidth + 30 || p.y > camera.viewportHeight + 30) {
         continue;
       }
@@ -527,6 +553,7 @@ export class Renderer {
       if (!lorry.path) continue;
       const pose = agentPose(lorry, alpha);
       const p = camera.worldToScreen(pose.x, pose.y);
+      p.y -= liftAt(sim, pose.x, pose.y, z);
       if (p.x < -12 || p.y < -12 || p.x > camera.viewportWidth + 12
         || p.y > camera.viewportHeight + 12) {
         continue;
@@ -589,6 +616,46 @@ export class Renderer {
 
   /** How many people are standing on each platform, over the station itself. */
   /**
+   * The viaducts and bridges, drawn after the ground they stand over.
+   *
+   * Two things sell it: a shadow on the ground under the deck, and the deck
+   * itself offset up the screen by how far it is carried. That is enough for
+   * a road over a railway to read as a road over a railway at a glance --
+   * which matters, because whether it is a flyover or a level crossing is the
+   * difference between a queue and no queue.
+   */
+  private drawRaised(sim: Simulation): void {
+    const { ctx, camera } = this;
+    const z = camera.zoom;
+    const { map } = sim.world;
+
+    for (const { tile, x, y } of this.raised) {
+      const size = z + 1;
+      ctx.fillStyle = COLORS.structureShadow;
+      ctx.fillRect(x + z * 0.12, y + z * 0.12, size, size);
+
+      for (const layer of ['rail', 'road'] as const) {
+        const raise = layer === 'road' ? map.roadRaise[tile] : map.railRaise[tile];
+        if (raise === 0) continue;
+        const lift = raise * z * RAISE_DRAW_HEIGHT;
+        const top = y - lift;
+
+        // The piers: what is holding the deck up, and the cue for how high.
+        ctx.fillStyle = COLORS.viaduct;
+        ctx.fillRect(x + z * 0.15, top + z * 0.5, z * 0.16, lift);
+        ctx.fillRect(x + z * 0.69, top + z * 0.5, z * 0.16, lift);
+
+        ctx.fillStyle = layer === 'road' ? COLORS.road : COLORS.rail;
+        ctx.fillRect(x, top, size, size);
+        ctx.strokeStyle = COLORS.viaductEdge;
+        ctx.lineWidth = Math.max(1, z * 0.06);
+        ctx.strokeRect(x, top, size, size);
+        if (layer === 'rail' && z >= 7) this.drawSleepers(x, top, z);
+      }
+    }
+  }
+
+  /**
    * The buses, drawn in the colour of the line they work so a player can see
    * at a glance which service is stuck in which jam.
    */
@@ -603,6 +670,7 @@ export class Renderer {
       if (!line) continue;
       const pose = agentPose(bus, alpha);
       const p = camera.worldToScreen(pose.x, pose.y);
+      p.y -= liftAt(sim, pose.x, pose.y, z);
       if (offScreen(camera, p, 12)) continue;
 
       const length = Math.max(5, z * 0.66);
@@ -631,6 +699,7 @@ export class Renderer {
       if (!unit.path) continue;
       const pose = agentPose(unit, alpha);
       const p = camera.worldToScreen(pose.x, pose.y);
+      p.y -= liftAt(sim, pose.x, pose.y, z);
       if (offScreen(camera, p, 12)) continue;
 
       const length = Math.max(4, z * 0.5);
@@ -815,6 +884,20 @@ interface Pose {
  * The lane offset is that heading turned ninety degrees to the left. Traffic
  * keeps left, so the two directions never overlap on the same tile.
  */
+/**
+ * How far up the screen something standing on this tile is drawn.
+ *
+ * Everything that moves asks the same question of the same layer, so a car on
+ * a flyover, the bus behind it and the fire engine behind that are all lifted
+ * by exactly the deck they are driving on -- and a train underneath is not.
+ */
+function liftAt(sim: Simulation, worldX: number, worldY: number, z: number, rail = false): number {
+  const tile = sim.world.map.at(Math.floor(worldX), Math.floor(worldY));
+  if (tile < 0) return 0;
+  const raise = rail ? sim.world.map.railRaise[tile] : sim.world.map.roadRaise[tile];
+  return raise * z * RAISE_DRAW_HEIGHT;
+}
+
 /** Whether a screen point is far enough outside the viewport to skip. */
 function offScreen(camera: Camera, p: { x: number; y: number }, margin: number): boolean {
   return p.x < -margin || p.y < -margin
@@ -870,6 +953,22 @@ function trainHeading(train: Train): number {
   const dy = train.y - train.prevY;
   if (dx === 0 && dy === 0) return 0;
   return Math.atan2(dy, dx);
+}
+
+/**
+ * A colour with the tile's hill shading applied.
+ *
+ * The shade byte is precomputed with the heights (128 = flat light), so this
+ * is a multiply per visible tile rather than a slope calculation per frame.
+ */
+function shaded(color: string, shade: number): string {
+  const k = shade / 128;
+  const hex = color.startsWith('#') ? color.slice(1) : null;
+  if (!hex || hex.length !== 6) return color;
+  const r = Math.min(255, Math.round(parseInt(hex.slice(0, 2), 16) * k));
+  const g = Math.min(255, Math.round(parseInt(hex.slice(2, 4), 16) * k));
+  const b = Math.min(255, Math.round(parseInt(hex.slice(4, 6), 16) * k));
+  return `rgb(${r}, ${g}, ${b})`;
 }
 
 function groundColor(resource: Resource, x: number, y: number): string {

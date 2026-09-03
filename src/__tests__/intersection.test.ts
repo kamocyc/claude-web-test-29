@@ -10,6 +10,7 @@ import { advanceVehicle, registerVehicle } from '../sim/movement';
 import { tileCenterX, tileCenterY } from '../sim/citizen';
 import type { RoadAgent } from '../sim/vehicle';
 import { World } from '../world/world';
+import { flatten } from './helpers';
 
 /**
  * A crossroads and nothing else: one street east/west, one north/south.
@@ -24,6 +25,7 @@ const JUNCTION = idx(10, 10);
 function crossroads(): World {
   const world = new World(7);
   world.map.terrain.fill(Terrain.Grass);
+  flatten(world);
   for (let x = 5; x <= 15; x++) world.placeRoad(idx(x, 10));
   for (let y = 5; y <= 15; y++) world.placeRoad(idx(10, y));
   return world;

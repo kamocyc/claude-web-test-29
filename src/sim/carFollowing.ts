@@ -36,6 +36,14 @@ export interface FollowingProfile {
   decelMax: number;
   length: number;
   minGap: number;
+  /**
+   * How much a hill costs this vehicle, as a multiple of what it costs a car.
+   *
+   * The one number that makes a gradient mean something different to a laden
+   * lorry than to a hatchback -- and it is on the profile, next to the
+   * acceleration, because it is the same kind of fact about the vehicle.
+   */
+  gradeSensitivity: number;
 }
 
 export const CAR_PROFILE: FollowingProfile = {
@@ -45,6 +53,7 @@ export const CAR_PROFILE: FollowingProfile = {
   decelMax: CAR_DECEL_MAX,
   length: CAR_LENGTH,
   minGap: CAR_MIN_GAP,
+  gradeSensitivity: 1,
 };
 
 /**
@@ -63,6 +72,9 @@ export const LORRY_PROFILE: FollowingProfile = {
   decelMax: LORRY_DECEL_MAX,
   length: LORRY_LENGTH,
   minGap: LORRY_MIN_GAP,
+  // Laden and low-geared: a gradient that slows a car noticeably nearly
+  // stops a lorry, which is why an industrial estate up a hill is a mistake.
+  gradeSensitivity: 1.8,
 };
 
 /**
@@ -81,6 +93,7 @@ export const BUS_PROFILE: FollowingProfile = {
   decelMax: BUS_DECEL_MAX,
   length: BUS_LENGTH,
   minGap: BUS_MIN_GAP,
+  gradeSensitivity: 1.4,
 };
 
 export const TRAIN_PROFILE: FollowingProfile = {
@@ -89,6 +102,10 @@ export const TRAIN_PROFILE: FollowingProfile = {
   decelComfort: TRAIN_DECEL_COMFORT,
   // Trains have no emergency stop worth modelling; comfort braking is the cap.
   decelMax: TRAIN_DECEL_COMFORT,
+  // Steel on steel has almost no grip to spare, which is the physical reason
+  // a railway is limited to one level per tile in the first place. What is
+  // left of a gradient after that limit still costs a train more than a car.
+  gradeSensitivity: 1.6,
   length: TRAIN_LENGTH,
   minGap: TRAIN_MIN_GAP,
 };

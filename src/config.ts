@@ -424,10 +424,17 @@ export const BUILD_COSTS = {
   school: 30_000,
   fireStation: 26_000,
   policeStation: 24_000,
+  // A viaduct is the expensive answer to a cheap problem, and it has to be:
+  // at fifteen times a road tile, taking a road over the railway is a
+  // deliberate purchase rather than something to do everywhere.
+  elevatedRoad: 700,
+  elevatedRail: 1_500,
 } as const;
 
 export const UPKEEP_PER_ROAD_TILE = 0.5;
 export const UPKEEP_PER_RAIL_TILE = 1.5;
+/** A structure held up in the air costs more to keep than one on the ground. */
+export const UPKEEP_PER_RAISED_TILE = 2;
 
 export const LOAN_TRANCHE = 50_000;
 export const MAX_DEBT = 400_000;
@@ -697,3 +704,75 @@ export const EMERGENCY_INTERVAL_MINUTES = 30;
 
 /** How long a unit with no route waits before trying again. */
 export const EMERGENCY_RETRY_TICKS = 200;
+
+// --- Terrain height --------------------------------------------------------
+// The map stops being a sheet of paper here. Every tile has a height in whole
+// levels, and three things read it: what a slope does to speed, where a
+// railway may be laid at all, and what a view is worth.
+//
+// Levels rather than metres, for the same reason the sim has no metres
+// anywhere else: what matters is the *step* between two neighbouring tiles,
+// because that is what a vehicle climbs and what a track cannot.
+
+export const MAX_TERRAIN_HEIGHT = 6;
+
+/**
+ * The steepest step a railway may climb between two tiles.
+ *
+ * One level, against a road's none: this asymmetry is the whole point of
+ * having heights at all. A road can go up anything (badly, slowly); a railway
+ * cannot, so it has to follow the contours, take the long way round, or be
+ * carried over the ground on a viaduct -- which is exactly the decision a
+ * railway engineer makes and the one this feature exists to offer.
+ */
+export const MAX_RAIL_STEP = 1;
+
+/**
+ * How much of its free speed a vehicle loses per level climbed, before the
+ * per-vehicle multiplier below.
+ *
+ * Set by what it does to a route rather than by physics: at 0.22 a car on the
+ * steepest ordinary hill (two levels in one tile) runs at a bit over half
+ * speed, so a hilly detour is worth taking and a hill in the middle of a
+ * commute is worth routing around -- but nothing is ever impassable.
+ */
+export const GRADE_SPEED_PENALTY = 0.22;
+
+/** Nothing crawls to a stop on a hill; this is the floor on the penalty. */
+export const MIN_GRADE_SPEED_RATIO = 0.3;
+
+/**
+ * How uneven the ground under a zone may be, in levels, counting the tile and
+ * its four neighbours.
+ *
+ * Buildings need a level plot. Keeping it at one level means gentle slopes
+ * build normally and an escarpment stays green, which is what makes a hillside
+ * a piece of landscape rather than more of the same city.
+ */
+export const MAX_BUILD_RELIEF = 1;
+
+// --- Elevated structures ---------------------------------------------------
+// A road or a track can be carried above the ground it stands on. That single
+// number -- how far above -- answers three separate things the city needs:
+//
+//   * a road over a railway is not a level crossing, so the barrier never
+//     comes down and the queue never forms;
+//   * a viaduct over water is a bridge, which is the only way across the
+//     river this city has ever had;
+//   * and a railway can hold its own gradient across ground that rises and
+//     falls under it, which is what makes MAX_RAIL_STEP survivable.
+
+/** How far above its own ground a structure may be carried. */
+export const MAX_RAISE = 3;
+
+/**
+ * The height difference at which two structures stop being the same place.
+ *
+ * One level. Anything sharing a tile at the same height is a level crossing;
+ * a single level apart and they simply pass, which is the whole of grade
+ * separation in this model.
+ */
+export const CLEARANCE = 1;
+
+/** How much of a tile one level of elevation is drawn as, for the renderer. */
+export const RAISE_DRAW_HEIGHT = 0.22;

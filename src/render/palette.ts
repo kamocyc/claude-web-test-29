@@ -78,6 +78,10 @@ export const COLORS = {
   powered: '#4ade80',
   unpowered: '#ff5252',
   noise: '#ff7a45',
+  /** The underside of a viaduct, and the shadow it throws on the ground. */
+  viaduct: '#3d4a57',
+  viaductEdge: '#5a6b7d',
+  structureShadow: 'rgba(6, 12, 18, 0.38)',
   crime: '#b45cf0',
   covered: '#4ade80',
   uncovered: '#ff7a45',
@@ -88,6 +92,19 @@ export const COLORS = {
   alertInfo: '#7fa8cc',
   alertText: '#12181d',
 } as const;
+
+/**
+ * Low ground to high, for the height overlay: a cool green valley through
+ * ochre to a pale summit. Deliberately not the land-value ramp -- the two
+ * overlays answer different questions and must not be mistaken for each other.
+ */
+export function heightColor(ratio: number): string {
+  const t = Math.min(1, Math.max(0, ratio));
+  const r = Math.round(70 + 165 * t);
+  const g = Math.round(110 + 90 * t);
+  const b = Math.round(80 + 60 * t);
+  return `rgb(${r}, ${g}, ${b})`;
+}
 
 /** Red (worthless) through amber to green (desirable), for the land value map. */
 export function valueColor(ratio: number): string {

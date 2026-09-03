@@ -4,7 +4,7 @@ import { idx, tileX } from '../core/grid';
 import { CitizenState, TravelMode, Zone } from '../core/types';
 import { Simulation } from '../sim/simulation';
 import { World } from '../world/world';
-import { powerTown } from './helpers';
+import { flatten, powerTown } from './helpers';
 
 /**
  * A town laid out so commuters are forced through one shared arterial: houses
@@ -13,6 +13,7 @@ import { powerTown } from './helpers';
 function buildTestTown(seed = 11, bridgeRows = 1): World {
   const w = new World(seed);
   w.map.terrain.fill(0);
+  flatten(w);
 
   // Housing grid on the west.
   for (let y = 10; y <= 30; y += 2) for (let x = 5; x <= 20; x++) w.placeRoad(idx(x, y));

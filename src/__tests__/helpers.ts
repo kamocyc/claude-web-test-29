@@ -18,6 +18,22 @@ export function powerTown(world: World, count = 2): void {
   }
 }
 
+/**
+ * Flatten a world's ground.
+ *
+ * The generated map has hills in it, which is the point of the terrain -- but
+ * a fixture built to measure something else (a queue, a supply chain, a
+ * train's acceleration) wants a controlled world, and a fixture that clears
+ * the water and then lays a grid over whatever the noise produced is not one.
+ * Anything that is actually about the ground says so by not calling this.
+ */
+export function flatten(world: World): void {
+  world.map.height.fill(0);
+  world.map.roadRaise.fill(0);
+  world.map.railRaise.fill(0);
+  world.map.refreshRelief();
+}
+
 /** Advance a simulation by whole ticks. */
 export function run(sim: Simulation, ticks: number): void {
   for (let i = 0; i < ticks; i++) sim.tick();
@@ -37,6 +53,7 @@ export function compactCity(): World {
   const w = new World(41);
   w.map.terrain.fill(Terrain.Grass);
   w.map.resource.fill(Resource.None);
+  flatten(w);
 
   // A 5-tile street grid, 70 tiles wide.
   const top = 20;

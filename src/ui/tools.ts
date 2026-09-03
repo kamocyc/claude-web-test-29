@@ -1,4 +1,5 @@
 import { COLORS } from '../render/palette';
+import { MAX_RAISE } from '../config';
 import { BuildingType, Zone, type TileIndex } from '../core/types';
 import { LineMode } from '../world/transit';
 import type { IconName } from './icons';
@@ -9,7 +10,9 @@ import { zoneRefusalReason } from '../world/zoneRules';
 export const enum Tool {
   Select = 'select',
   Road = 'road',
+  ElevatedRoad = 'elevatedRoad',
   Rail = 'rail',
+  ElevatedRail = 'elevatedRail',
   Station = 'station',
   Line = 'line',
   BusStop = 'busStop',
@@ -86,8 +89,10 @@ export const TOOL_LABELS: ReadonlyArray<ToolInfo> = [
   { tool: Tool.Select, label: '選択', key: '1', group: 'select', icon: 'select' },
 
   { tool: Tool.Road, label: '道路', key: '2', group: 'road', icon: 'road' },
+  { tool: Tool.ElevatedRoad, label: '高架道路', key: 'k', group: 'road', icon: 'elevatedRoad' },
 
   { tool: Tool.Rail, label: '線路', key: '3', group: 'rail', icon: 'rail' },
+  { tool: Tool.ElevatedRail, label: '高架線路', key: 'l', group: 'rail', icon: 'elevatedRail' },
   { tool: Tool.Station, label: '駅', key: '4', group: 'rail', icon: 'station' },
   { tool: Tool.Line, label: '路線', key: '5', group: 'rail', icon: 'line' },
 
@@ -153,6 +158,7 @@ export function lineToolFor(tool: Tool): LineMode | null {
 /** Tools that paint continuously while the mouse is dragged. */
 export function isDragTool(tool: Tool): boolean {
   return tool === Tool.Road || tool === Tool.Rail || tool === Tool.Bulldoze
+    || tool === Tool.ElevatedRoad || tool === Tool.ElevatedRail
     || zoneOf(tool) !== null;
 }
 
@@ -163,6 +169,10 @@ export function expenseOf(tool: Tool): Expense | null {
       return Expense.Road;
     case Tool.Rail:
       return Expense.Rail;
+    case Tool.ElevatedRoad:
+      return Expense.ElevatedRoad;
+    case Tool.ElevatedRail:
+      return Expense.ElevatedRail;
     case Tool.Station:
       return Expense.Station;
     case Tool.BusStop:
@@ -232,7 +242,19 @@ export function applyTool(
     case Tool.Road:
       return charged(world.placeRoad(tile), economy, Expense.Road);
     case Tool.Rail:
+      if (!world.map.isWater(tile) && !world.railGradeAllows(tile, 0) && !world.map.isRail(tile)) {
+        return { applied: false, message: '線路は1タイルにつき高低差1までしか登れません' };
+      }
       return charged(world.placeRail(tile), economy, Expense.Rail);
+    case Tool.ElevatedRoad:
+      return charged(world.raiseRoad(tile), economy, Expense.ElevatedRoad);
+    case Tool.ElevatedRail: {
+      const result = charged(world.raiseRail(tile), economy, Expense.ElevatedRail);
+      if (!result.applied && world.map.railRaise[tile] < MAX_RAISE) {
+        return { applied: false, message: '前後の線路との高低差が大きすぎます' };
+      }
+      return result;
+    }
     case Tool.Station: {
       const built = world.placeStation(tile) !== null;
       if (!built) return { applied: false, message: '駅は道路に接する空きタイルにしか置けません' };

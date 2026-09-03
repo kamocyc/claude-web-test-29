@@ -5,12 +5,13 @@ import { BuildingType, Terrain, Zone } from '../core/types';
 import { Service } from '../sim/services';
 import { Simulation } from '../sim/simulation';
 import { World } from '../world/world';
-import { powerTown, run } from './helpers';
+import { flatten, powerTown, run } from './helpers';
 
 /** Two housing clusters, joined only by the road the test decides to lay. */
 function twoDistricts(joined: boolean): World {
   const w = new World(67);
   w.map.terrain.fill(Terrain.Grass);
+  flatten(w);
 
   for (let x = 10; x <= 22; x++) w.placeRoad(idx(x, 20));
   for (let x = 30; x <= 42; x++) w.placeRoad(idx(x, 20));

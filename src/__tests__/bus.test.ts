@@ -6,7 +6,7 @@ import { Simulation } from '../sim/simulation';
 import { createBusLine, layoutRoadRoute } from '../world/lineBuilder';
 import { LineMode } from '../world/transit';
 import { World } from '../world/world';
-import { powerTown, run } from './helpers';
+import { flatten, powerTown, run } from './helpers';
 
 /**
  * Housing at one end of a long street, jobs at the other, and stops along it.
@@ -17,6 +17,7 @@ import { powerTown, run } from './helpers';
 function busTown(withStops: boolean): { world: World; stops: BuildingId[] } {
   const w = new World(53);
   w.map.terrain.fill(0);
+  flatten(w);
 
   const y = 30;
   const WEST = 10;
@@ -56,6 +57,7 @@ describe('bus routes', () => {
   it('refuses to open a route whose stops the roads do not join up', () => {
     const w = new World(7);
     w.map.terrain.fill(0);
+    flatten(w);
     for (let x = 5; x <= 15; x++) w.placeRoad(idx(x, 10));
     for (let x = 40; x <= 50; x++) w.placeRoad(idx(x, 10));
 
@@ -153,6 +155,7 @@ describe('bus routes', () => {
   it('puts a stop where a bus stop is, and refuses open ground', () => {
     const w = new World(9);
     w.map.terrain.fill(0);
+    flatten(w);
     for (let x = 5; x <= 15; x++) w.placeRoad(idx(x, 10));
 
     expect(w.placeBusStop(idx(6, 11))).not.toBeNull();

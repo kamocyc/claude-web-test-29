@@ -5,11 +5,12 @@ import { CitizenState, TravelMode, Zone, type BuildingId } from '../core/types';
 import { Simulation } from '../sim/simulation';
 import { createLine } from '../world/lineBuilder';
 import { World } from '../world/world';
-import { powerTown } from './helpers';
+import { flatten, powerTown } from './helpers';
 
 function railTown(): World {
   const w = new World(77);
   w.map.terrain.fill(0);
+  flatten(w);
 
   const y = 30;
   for (const row of [y, y + 4]) {

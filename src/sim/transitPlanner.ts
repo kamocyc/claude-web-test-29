@@ -118,7 +118,7 @@ function walkRoute(world: World, from: Building, to: Building): TileIndex[] | nu
   world.refreshAccess(to);
   if (from.accessRoad < 0 || to.accessRoad < 0) return null;
 
-  const roads = findPath(world.roads, from.accessRoad, to.accessRoad);
+  const roads = findPath(world.roads, from.accessRoad, to.accessRoad, world.roadStep);
   if (!roads) return null;
   return [from.tile, ...roads, to.tile];
 }

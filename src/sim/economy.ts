@@ -8,6 +8,7 @@ import {
   EDUCATION_WAGE_BONUS,
   TAX_RATE_LIMITS,
   UPKEEP_PER_RAIL_TILE,
+  UPKEEP_PER_RAISED_TILE,
   UPKEEP_PER_ROAD_TILE,
 } from '../config';
 import { Industry } from '../core/types';
@@ -27,6 +28,8 @@ export const enum Expense {
   School = 'school',
   FireStation = 'fireStation',
   PoliceStation = 'policeStation',
+  ElevatedRoad = 'elevatedRoad',
+  ElevatedRail = 'elevatedRail',
 }
 
 /** Tax is levied per category, because that is the lever the player has. */
@@ -181,9 +184,14 @@ export class Economy {
       b.soldToday = 0;
     }
 
+    // A viaduct costs more to keep than the ground it replaced, and the bill
+    // is per level: a road carried three storeys up is three times the
+    // structure of one carried one.
     book.upkeep = world.infrastructureUpkeep
       + world.countTiles(world.map.road) * UPKEEP_PER_ROAD_TILE
-      + world.countTiles(world.map.rail) * UPKEEP_PER_RAIL_TILE;
+      + world.countTiles(world.map.rail) * UPKEEP_PER_RAIL_TILE
+      + (world.countTiles(world.map.roadRaise) + world.countTiles(world.map.railRaise))
+        * UPKEEP_PER_RAISED_TILE;
 
     book.interest = this.debt * DEBT_INTEREST_PER_DAY
       + (this.balance < 0 ? -this.balance * OVERDRAFT_INTEREST_PER_DAY : 0);

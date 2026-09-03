@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { idx } from '../core/grid';
 import { findPath, PathCache } from '../sim/pathfinding';
 import { World } from '../world/world';
+import { flatten } from './helpers';
 
 function flatWorld(): World {
   const w = new World(3);
   w.map.terrain.fill(0);
+  flatten(w);
   return w;
 }
 

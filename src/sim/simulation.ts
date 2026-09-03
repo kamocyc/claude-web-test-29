@@ -272,7 +272,7 @@ export class Simulation {
 
     const key = `${from.accessRoad}:${to.accessRoad}`;
     const roadPath = this.pathCache.get(world.roads, key, () =>
-      findPath(world.roads, from.accessRoad, to.accessRoad),
+      findPath(world.roads, from.accessRoad, to.accessRoad, world.roadStep),
     );
 
     const doorToDoor = roadPath ? [from.tile, ...roadPath, to.tile] : null;

@@ -14,8 +14,26 @@ import { tileCenterX, tileCenterY } from './citizen';
 import type { Crossings } from './crossings';
 import type { Occupancy } from './occupancy';
 import type { Signals } from './signals';
+import { gradeSpeedFactor } from './gradient';
 import { findPath } from './pathfinding';
 import { occupantSize, type RoadAgent } from './vehicle';
+
+/**
+ * People feel a hill about as much as a car does. Being on foot is the one
+ * mode where going up really is the whole cost of the journey.
+ */
+const WALK_GRADE_SENSITIVITY = 1.2;
+
+/** What the climb on this segment of a route does to the free speed on it. */
+export function gradeFactor(
+  world: World,
+  path: TileIndex[],
+  seg: number,
+  sensitivity: number,
+): number {
+  const climb = world.map.travelHeight(path[seg + 1]) - world.map.travelHeight(path[seg]);
+  return gradeSpeedFactor(climb, sensitivity);
+}
 
 /** Index of the last road tile on the route; beyond it the agent walks. */
 function driveEndIndex(path: TileIndex[]): number {
@@ -83,10 +101,13 @@ export function advanceVehicle(
     const gap = gapToLeader(world, c, occ, seg, local, dir);
     hold = distanceToStop(world, c, occ, crossings, signals, tick, seg, dir, released);
 
-    const free = c.profile.freeSpeed;
+    // A hill is a speed limit, not a separate system: the free speed for this
+    // one segment is lowered and the following model does the rest, so a
+    // vehicle labours up a slope and the queue behind it labours too.
+    const free = c.profile.freeSpeed * gradeFactor(world, path, seg, c.profile.gradeSensitivity);
     c.v = stepSpeed(c.v, desiredSpeed(free, gap, hold.distance, c.profile), free, c.profile);
   } else {
-    c.v = WALK_SPEED;
+    c.v = WALK_SPEED * gradeFactor(world, path, seg, WALK_GRADE_SENSITIVITY);
   }
 
   c.s += c.v;
@@ -309,7 +330,7 @@ export function routeToBuilding(
   if (from < 0) return null;
   if (to.accessRoad < 0) return null;
 
-  const roads = findPath(world.roads, from, to.accessRoad);
+  const roads = findPath(world.roads, from, to.accessRoad, world.roadStep);
   if (!roads) return null;
   // Start from the yard the vehicle is actually standing in, so it drives out
   // of the gate rather than appearing on the road outside it.

@@ -1,4 +1,4 @@
-import { CAR_FREE_SPEED, LORRY_CAPACITY, TRAIN_CAPACITY } from '../config';
+import { CAR_FREE_SPEED, LORRY_CAPACITY, MAX_TERRAIN_HEIGHT, TRAIN_CAPACITY } from '../config';
 import { ticksToMinutes } from '../core/clock';
 import { tileX, tileY } from '../core/grid';
 import { BuildingType, CitizenState, TravelMode } from '../core/types';
@@ -24,7 +24,8 @@ export const INSPECTOR_HELP = '市民・建物・駅・トラックをクリッ�
   + '速度を ×0.25 にして「カメラで追う」を入れると、1人の一日を最初から最後まで追えます。';
 
 /** Behind the "？" on the land value breakdown. */
-const LAND_VALUE_HELP = '地価を上げるには、駅と商店を近くに、工場と幹線道路を遠くに。水辺と森も効きます。'
+const LAND_VALUE_HELP = '地価を上げるには、駅と商店を近くに、工場と幹線道路を遠くに。'
+  + '水辺・森・高台の眺望も効きます。'
   + '地価が低いと高密度住宅は建たず、住民の幸福度も下がります。';
 
 /** Rebuilt a few times a second, like the other panels, rather than per frame. */
@@ -214,6 +215,7 @@ export class Inspector {
         ['電気', home.powered ? '来ている' : '来ていない'],
         ['学校', sim.services.serves(Service.School, home) ? '通える' : '通えない'],
         ['消防', sim.services.serves(Service.Fire, home) ? '間に合う' : '届かない'],
+        ['標高', heightLabel(sim, home.tile)],
         ['食料の備え', `${c.pantry.toFixed(1)} 日分${c.lastShopFailed ? '（前回買えず）' : ''}`],
       ]));
       this.appendLandValue(sim, home.tile);
@@ -299,6 +301,7 @@ export class Inspector {
       ['電気', b.powered ? `来ている（${spec.power}）` : '⚠ 来ていない'],
       ['騒音', `${Math.round(sim.noise.at(b.tile))} / 100`],
       ['治安', `${Math.round(100 - sim.crime.at(b.tile))} / 100`],
+      ['標高', heightLabel(sim, b.tile)],
       ['消防', sim.services.serves(Service.Fire, b) ? '署から届く' : '⚠ 届かない'],
     ];
 
@@ -522,6 +525,7 @@ function formatMinute(m: number): string {
 const LAND_VALUE_TERMS: ReadonlyArray<[keyof LandValueFactors, string]> = [
   ['water', '水辺'],
   ['greenery', '森'],
+  ['view', '眺望'],
   ['station', '駅が近い'],
   ['shops', '商店が近い'],
   ['offices', 'オフィスが近い'],
@@ -535,6 +539,16 @@ function signedPoints(value: number): string {
   return rounded > 0 ? `+${rounded}` : `${rounded}`;
 }
 
+
+/** A tile's height, and how it sits against the ground around it. */
+function heightLabel(sim: Simulation, tile: number): string {
+  const map = sim.world.map;
+  const prominence = map.prominence[tile];
+  const relief = map.relief(tile);
+  const where = prominence >= 2 ? '（高台）' : prominence <= -2 ? '（窪地）' : '';
+  return `${map.height[tile]} / ${MAX_TERRAIN_HEIGHT}${where}`
+    + (relief >= 2 ? `　傾斜 ${relief}` : '');
+}
 
 /** Riders aboard every vehicle working a line right now. */
 function aboardOn(world: World, line: TransitLine): number {

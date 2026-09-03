@@ -130,4 +130,5 @@ const OVERLAY_KEYS: Readonly<Record<string, Overlay>> = {
   v: 'landValue',
   c: 'crime',
   b: 'services',
+  m: 'height',
 };

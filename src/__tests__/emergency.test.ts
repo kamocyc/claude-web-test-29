@@ -5,12 +5,13 @@ import { BuildingType, Terrain, Zone } from '../core/types';
 import { IncidentKind, UnitState } from '../sim/emergency';
 import { Simulation } from '../sim/simulation';
 import { World } from '../world/world';
-import { powerTown, run } from './helpers';
+import { flatten, powerTown, run } from './helpers';
 
 /** One street with housing along it, and room for a station at either end. */
 function street(): World {
   const w = new World(83);
   w.map.terrain.fill(Terrain.Grass);
+  flatten(w);
   for (let x = 10; x <= 60; x++) w.placeRoad(idx(x, 20));
   for (let x = 10; x <= 60; x++) {
     for (const y of [19, 21]) {

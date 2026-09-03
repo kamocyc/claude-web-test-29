@@ -6,7 +6,7 @@ import { IncidentKind } from '../sim/emergency';
 import { Simulation } from '../sim/simulation';
 import { createBusLine, createLine } from '../world/lineBuilder';
 import { deserialize, serialize } from '../world/persistence';
-import { compactCity } from './helpers';
+import { compactCity, flatten } from './helpers';
 import { World } from '../world/world';
 import { powerTown } from './helpers';
 
@@ -14,6 +14,7 @@ import { powerTown } from './helpers';
 function town(): World {
   const w = new World(99);
   w.map.terrain.fill(0);
+  flatten(w);
 
   const y = 30;
   for (const row of [y, y + 4]) {

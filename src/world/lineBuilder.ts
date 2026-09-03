@@ -1,3 +1,4 @@
+import { MAX_RAIL_STEP } from '../config';
 import { manhattan, neighbor, tileX, tileY } from '../core/grid';
 import { BuildingType, Terrain, type BuildingId, type Direction, type TileIndex } from '../core/types';
 import { findPath } from '../sim/pathfinding';
@@ -35,7 +36,7 @@ export function layoutRoute(world: World, stations: BuildingId[]): RouteLayout |
     }
 
     const prev = world.buildings[stations[i - 1]];
-    const segment = findPath(world.rails, prev.platform, station.platform);
+    const segment = findPath(world.rails, prev.platform, station.platform, world.railStep);
     if (!segment || segment.length < 2) return null;
 
     // Drop the shared first tile so segments join without duplication.
@@ -86,7 +87,7 @@ export function layoutRoadRoute(world: World, stops: BuildingId[]): RouteLayout 
     }
 
     const prev = world.buildings[stops[i - 1]];
-    const segment = findPath(world.roads, prev.accessRoad, stop.accessRoad);
+    const segment = findPath(world.roads, prev.accessRoad, stop.accessRoad, world.roadStep);
     if (!segment || segment.length < 2) return null;
 
     for (let k = 1; k < segment.length; k++) oneWay.push(segment[k]);
@@ -187,7 +188,8 @@ function ensurePlatform(world: World, id: BuildingId, laid: TileIndex[]): boolea
   }
 
   const candidates = neighborsOf(station.tile)
-    .filter((tile) => tile !== station.accessRoad && canLayRail(world, tile))
+    .filter((tile) => tile !== station.accessRoad && canLayRail(world, tile)
+      && world.railGradeAllows(tile, 0))
     .sort((a, b) => oppositeScore(station.tile, station.accessRoad, b)
       - oppositeScore(station.tile, station.accessRoad, a));
   if (candidates.length === 0) return false;
@@ -262,6 +264,18 @@ function canLayRail(world: World, tile: TileIndex): boolean {
   return world.map.terrain[tile] !== Terrain.Water && world.map.building[tile] === -1;
 }
 
+/**
+ * Whether track may run between two tiles at all: the gradient limit, applied
+ * to the alignment search rather than only to the tile being placed.
+ *
+ * Checking it here is what makes the search *route around* a slope it cannot
+ * climb, instead of driving a line straight at an escarpment and failing at
+ * the last tile with everything already laid.
+ */
+function railStepAllowed(world: World, from: TileIndex, to: TileIndex): boolean {
+  return Math.abs(world.map.railHeight(to) - world.map.railHeight(from)) <= MAX_RAIL_STEP;
+}
+
 /** Cost of changing direction, in tiles. Straight track is cheaper track. */
 const TURN_COST = 0.6;
 
@@ -311,6 +325,7 @@ function findRailRoute(world: World, from: TileIndex, to: TileIndex): TileIndex[
     for (let dir = 0; dir < 4; dir++) {
       const next = neighbor(tile, dir as Direction);
       if (next < 0 || !canLayRail(world, next)) continue;
+      if (!railStepAllowed(world, tile, next)) continue;
 
       const cost = g + 1 + (dir === arrivedBy ? 0 : TURN_COST);
       const nextState = state(next, dir);
