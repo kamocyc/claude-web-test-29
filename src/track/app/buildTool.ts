@@ -1376,6 +1376,24 @@ export class BuildTool {
     if (this.lines?.removeLastStop(this.editingLineId)) this.onChanged();
   }
 
+  /**
+   * The alignment being previewed, as a polyline on the ground.
+   *
+   * The 3D view draws the preview as a mesh; a plan view cannot, and needs the
+   * line itself. Both come from the same `previewAlignment`, so the shape the
+   * player sees from above is the shape they see from inside the world.
+   */
+  previewPolyline(spacing = 4): Vector3[] {
+    if (!this.preview) return [];
+    const alignment = this.previewAlignment(this.preview);
+    const steps = Math.max(1, Math.ceil(alignment.length / spacing));
+    const out: Vector3[] = [];
+    for (let i = 0; i <= steps; i++) {
+      out.push(alignment.sampleAt((alignment.length * i) / steps).pos.clone());
+    }
+    return out;
+  }
+
   status(): ToolStatus {
     const preview = this.preview;
     const length = this.mode === 'station'

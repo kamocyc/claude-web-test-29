@@ -1,6 +1,16 @@
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  // Two pages during the port: the tile city that is being replaced, and the
+  // city on the alignment engine that replaces it.
+  build: {
+    rollupOptions: {
+      input: {
+        main: 'index.html',
+        city: 'city.html',
+      },
+    },
+  },
   test: {
     globals: true,
     environment: 'node',

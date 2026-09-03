@@ -84,9 +84,22 @@ describe('the opening town', () => {
       .toEqual(a.result.lots.map((lot) => [lot.center.x, lot.center.z, lot.zone]));
   });
 
-  it('reports no errors from the engine that laid it', () => {
+  it('reports nothing at all from the engine that laid it', () => {
     const { result } = openingTown();
-    const errors = result.warnings.filter((w) => w.severity === 'error');
-    expect(errors.map((w) => w.message)).toEqual([]);
+    // Not just "no errors". The first thing a player sees must not be a list
+    // of complaints the game made about its own town: a street laid up a
+    // slope it cannot climb, or a railway joint the engine calls a kink. Both
+    // happened, and both are why the town now searches for a flat site and
+    // puts its plain track on the station's own centre line.
+    expect(result.warnings.map((w) => w.message)).toEqual([]);
+  });
+
+  it('sits on ground its own streets can climb', () => {
+    const { world } = openingTown();
+    for (const segment of world.net.segments.values()) {
+      const cls = world.net.classOf(segment);
+      const grade = world.net.alignmentOf(segment.id).vertical.maxGrade();
+      expect(Math.abs(grade)).toBeLessThanOrEqual(cls.maxGrade + 1e-6);
+    }
   });
 });

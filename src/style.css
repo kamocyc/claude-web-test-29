@@ -125,6 +125,35 @@ html, body {
   overflow: hidden;
 }
 
+/* The 3D view sits in the same box as the plan; only one is shown at a time. */
+#view3d {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+}
+
+/* Text buttons in the toolbar, for the classes and modes the engine offers.
+   Fixed-size icon buttons cannot carry "生活道路 (2 車線)", and a wrapping
+   label makes the whole bar jump about as the text changes -- so these size
+   to their text and never wrap. */
+.tool-button.text {
+  width: auto;
+  min-width: 0;
+  height: 26px;
+  padding: 0 9px;
+  font-size: 12px;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+/* Each group is as wide as its buttons, and the row scrolls rather than
+   letting a group squash its neighbours. */
+#toolbar .tool-group { flex: 0 0 auto; }
+#toolbar .tool-group-body { flex-wrap: nowrap; }
+
 #map {
   position: absolute;
   inset: 0;
