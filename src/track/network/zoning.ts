@@ -21,16 +21,48 @@ import type { Heightfield } from '../terrain/heightfield';
  *   マスをまとめて敷地にする → 建物を建てる
  */
 
-/** 区画の用途。 */
-export type ZoneType = 'residential' | 'commercial' | 'industrial';
+/**
+ * 区画の用途。
+ *
+ * 移植元は住宅・商業・工業の3種だったが、この街の経済は9種を区別する
+ * (集合住宅は地価が要る、オフィスは商品を要らない、一次産業は地形が要る)。
+ * 用途は「塗る単位」であると同時に「何が建つか」でもあるので、経済の側だけ
+ * 9種にして塗りを3種のままにすると、塗った土地と建った建物が食い違う。
+ */
+export type ZoneType =
+  | 'residential'
+  | 'apartment'
+  | 'commercial'
+  | 'office'
+  | 'industrial'
+  | 'farm'
+  | 'forestry'
+  | 'fishery'
+  | 'mining';
 
-export const ZONE_TYPES: ZoneType[] = ['residential', 'commercial', 'industrial'];
+export const ZONE_TYPES: ZoneType[] = [
+  'residential',
+  'apartment',
+  'commercial',
+  'office',
+  'industrial',
+  'farm',
+  'forestry',
+  'fishery',
+  'mining',
+];
 
 /** 用途の表示名。 */
 export const ZONE_LABELS: Record<ZoneType, string> = {
-  residential: '住宅',
+  residential: '低密度住宅',
+  apartment: '高密度住宅',
   commercial: '商業',
+  office: 'オフィス',
   industrial: '工業',
+  farm: '農業',
+  forestry: '林業',
+  fishery: '漁業',
+  mining: '鉱業',
 };
 
 /** マス 1 つの間口 [m] (道路に沿う向きの長さ)。 */
@@ -69,8 +101,15 @@ const ZONE_MAX_DROP = 8.0;
 /** 1 棟にまとめてよいマスの数 (間口方向)。用途ごとに大きさの性格を変える。 */
 const MAX_WIDTH: Record<ZoneType, number> = {
   residential: 2,
+  apartment: 3,
   commercial: 3,
+  office: 3,
   industrial: 4,
+  // 一次産業は敷地が広いほうが「その土地を使っている」ように見える。
+  farm: 5,
+  forestry: 4,
+  fishery: 3,
+  mining: 4,
 };
 
 /**

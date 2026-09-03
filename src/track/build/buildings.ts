@@ -22,8 +22,14 @@ import type { RGB } from './surface';
 /** 区画の表示色 (用途ごと)。 */
 export const ZONE_COLORS: Record<ZoneType, RGB> = {
   residential: [0.36, 0.72, 0.4],
+  apartment: [0.24, 0.55, 0.3],
   commercial: [0.32, 0.6, 0.92],
+  office: [0.24, 0.76, 0.76],
   industrial: [0.92, 0.7, 0.3],
+  farm: [0.78, 0.7, 0.32],
+  forestry: [0.28, 0.6, 0.4],
+  fishery: [0.32, 0.72, 0.8],
+  mining: [0.64, 0.48, 0.34],
 };
 
 /** 用途を塗っていない区画の表示色。 */
@@ -44,8 +50,15 @@ const GRID_STEP = 4;
 /** 道路側に空ける前庭の奥行き [m] (用途ごと)。 */
 const FRONT_YARD: Record<ZoneType, number> = {
   residential: 3.4,
+  apartment: 2.6,
   commercial: 1.6,
+  office: 2.0,
   industrial: 2.6,
+  // 一次産業は建屋を奥に寄せ、道路側を作業場・畑にする。
+  farm: 5.0,
+  forestry: 4.0,
+  fishery: 3.0,
+  mining: 4.0,
 };
 
 /** 隣地との離れ [m]。間口いっぱいには建てない。 */
@@ -62,8 +75,15 @@ const BACK_GAP = 2.0;
  */
 const MAX_HALF: Record<ZoneType, { along: number; depth: number }> = {
   residential: { along: 6.5, depth: 6.0 },
+  apartment: { along: 11, depth: 9 },
   commercial: { along: 40, depth: 40 },
+  office: { along: 14, depth: 12 },
   industrial: { along: 40, depth: 40 },
+  // 一次産業の「建物」は敷地の中の作業棟なので、敷地なりには広げない。
+  farm: { along: 7, depth: 6 },
+  forestry: { along: 8, depth: 7 },
+  fishery: { along: 8, depth: 7 },
+  mining: { along: 9, depth: 8 },
 };
 
 const ROOF_COLORS: RGB[] = [
@@ -192,9 +212,38 @@ export function buildBuilding(mb: MeshBuilder, lot: Lot, ground: GroundQuery): v
   );
 
   const base = new Vector3(center.x, padY, center.z);
-  if (zone === 'residential') buildHouse(mb, lot, base, halfAlong, halfDepth, rand);
-  else if (zone === 'commercial') buildShop(mb, lot, base, halfAlong, halfDepth, rand);
-  else buildFactory(mb, lot, base, halfAlong, halfDepth, rand);
+  // 用途ごとの建て方。「9種を色違いの箱で出す」ことだけはしない —
+  // 遠目に街を見たときに、住宅地と工業地とオフィス街が形で分かることが、
+  // 3D で街を見せる理由そのものなので。
+  switch (zone) {
+    case 'residential':
+      buildHouse(mb, lot, base, halfAlong, halfDepth, rand);
+      break;
+    case 'apartment':
+      buildApartment(mb, lot, base, halfAlong, halfDepth, rand);
+      break;
+    case 'commercial':
+      buildShop(mb, lot, base, halfAlong, halfDepth, rand);
+      break;
+    case 'office':
+      buildOffice(mb, lot, base, halfAlong, halfDepth, rand);
+      break;
+    case 'farm':
+      buildFarm(mb, lot, base, halfAlong, halfDepth, rand);
+      break;
+    case 'forestry':
+      buildForestry(mb, lot, base, halfAlong, halfDepth, rand);
+      break;
+    case 'fishery':
+      buildFishery(mb, lot, base, halfAlong, halfDepth, rand);
+      break;
+    case 'mining':
+      buildMine(mb, lot, base, halfAlong, halfDepth, rand);
+      break;
+    default:
+      buildFactory(mb, lot, base, halfAlong, halfDepth, rand);
+      break;
+  }
 }
 
 const UP = new Vector3(0, 1, 0);
@@ -380,6 +429,347 @@ function buildFactory(
     lot.outward,
     { x: 0.55, y: height * 0.75, z: 0.55 },
     CONCRETE,
+  );
+}
+
+/**
+ * 集合住宅。同じ間口の住戸を積んだ板状の棟に、廊下側と balcony 側を作る。
+ *
+ * 低密度住宅との違いが「高さ」だけだと、遠目には同じ街並みになってしまう。
+ * 板状の棟・水平に通る廊下・並んだバルコニーという**別の形**を与えて、
+ * 高密度住宅地が高密度に見えるようにする。
+ */
+function buildApartment(
+  mb: MeshBuilder,
+  lot: Lot,
+  base: Vector3,
+  halfAlong: number,
+  halfDepth: number,
+  rand: () => number,
+): void {
+  const floors = 4 + Math.floor(rand() * 4);
+  const floorHeight = 2.9;
+  const height = floors * floorHeight;
+  const hx = halfAlong * (0.94 + rand() * 0.05);
+  const hz = halfDepth * (0.76 + rand() * 0.1);
+  const wallColor = pick(HOUSE_COLORS, rand);
+
+  addBox(
+    mb,
+    base.clone().addScaledVector(UP, height / 2),
+    lot.along,
+    UP,
+    lot.outward,
+    { x: hx, y: height / 2, z: hz },
+    wallColor,
+  );
+
+  // 各階のバルコニー (道路側)。1 本の帯にして、階数がそのまま見えるようにする。
+  for (let floor = 1; floor < floors; floor++) {
+    addBox(
+      mb,
+      base
+        .clone()
+        .addScaledVector(UP, floor * floorHeight + 0.5)
+        .addScaledVector(lot.outward, -(hz + 0.5)),
+      lot.along,
+      UP,
+      lot.outward,
+      { x: hx * 0.92, y: 0.5, z: 0.5 },
+      CONCRETE,
+    );
+  }
+  // 妻側の階段室。板状の棟にはこれが要る。
+  addBox(
+    mb,
+    base
+      .clone()
+      .addScaledVector(UP, (height + 1.4) / 2)
+      .addScaledVector(lot.along, hx * (rand() < 0.5 ? -1 : 1)),
+    lot.along,
+    UP,
+    lot.outward,
+    { x: 1.6, y: (height + 1.4) / 2, z: hz * 0.55 },
+    CONCRETE,
+  );
+  // 陸屋根のパラペットと塔屋。
+  addBox(
+    mb,
+    base.clone().addScaledVector(UP, height + 0.35),
+    lot.along,
+    UP,
+    lot.outward,
+    { x: hx, y: 0.35, z: hz },
+    CONCRETE,
+  );
+}
+
+/** オフィス。ガラスの帯を積んだ塔。街のどこからでも business district が分かる。 */
+function buildOffice(
+  mb: MeshBuilder,
+  lot: Lot,
+  base: Vector3,
+  halfAlong: number,
+  halfDepth: number,
+  rand: () => number,
+): void {
+  const floors = 6 + Math.floor(rand() * 7);
+  const floorHeight = 3.6;
+  const height = floors * floorHeight;
+  const hx = halfAlong * (0.9 + rand() * 0.08);
+  const hz = halfDepth * (0.86 + rand() * 0.1);
+
+  // 躯体。ガラスの帯を挟むので、外壁は少し内側に。
+  addBox(
+    mb,
+    base.clone().addScaledVector(UP, height / 2),
+    lot.along,
+    UP,
+    lot.outward,
+    { x: hx * 0.97, y: height / 2, z: hz * 0.97 },
+    pick(OFFICE_COLORS, rand),
+  );
+  // 階ごとのガラス帯。1 層おきにすると、遠目に縞として読める。
+  for (let floor = 0; floor < floors; floor += 1) {
+    addBox(
+      mb,
+      base.clone().addScaledVector(UP, floor * floorHeight + floorHeight * 0.6),
+      lot.along,
+      UP,
+      lot.outward,
+      { x: hx, y: floorHeight * 0.3, z: hz },
+      GLASS,
+    );
+  }
+  // 頂部の設備階。
+  addBox(
+    mb,
+    base.clone().addScaledVector(UP, height + 1.2),
+    lot.along,
+    UP,
+    lot.outward,
+    { x: hx * 0.55, y: 1.2, z: hz * 0.55 },
+    CONCRETE,
+  );
+}
+
+/**
+ * 水田と作業小屋。
+ *
+ * 敷地のほとんどは**畑**で、建屋は隅の小屋。一次産業の敷地を「小さな工場」
+ * として建てると、農地が街の中の工場地帯に見えてしまう。
+ */
+function buildFarm(
+  mb: MeshBuilder,
+  lot: Lot,
+  base: Vector3,
+  halfAlong: number,
+  halfDepth: number,
+  rand: () => number,
+): void {
+  // 水を張った田。薄い板を敷地いっぱいに敷く。
+  addBox(
+    mb,
+    base.clone().addScaledVector(UP, 0.12),
+    lot.along,
+    UP,
+    lot.outward,
+    { x: halfAlong, y: 0.12, z: halfDepth },
+    [0.35, 0.45, 0.3],
+  );
+  // 畦。田を何枚かに区切る。
+  const strips = 2 + Math.floor(rand() * 2);
+  for (let i = 1; i < strips; i++) {
+    const at = -halfAlong + (2 * halfAlong * i) / strips;
+    addBox(
+      mb,
+      base.clone().addScaledVector(UP, 0.3).addScaledVector(lot.along, at),
+      lot.along,
+      UP,
+      lot.outward,
+      { x: 0.25, y: 0.3, z: halfDepth },
+      [0.5, 0.45, 0.36],
+    );
+  }
+  // 作業小屋。奥の隅に寄せる。
+  const shed = 3.4;
+  addBox(
+    mb,
+    base
+      .clone()
+      .addScaledVector(UP, shed / 2)
+      .addScaledVector(lot.along, halfAlong * 0.7 * (rand() < 0.5 ? -1 : 1))
+      .addScaledVector(lot.outward, halfDepth * 0.66),
+    lot.along,
+    UP,
+    lot.outward,
+    { x: 2.6, y: shed / 2, z: 2.0 },
+    [0.68, 0.66, 0.6],
+  );
+}
+
+/** 林業。丸太を積み上げた土場と、製材の建屋。 */
+function buildForestry(
+  mb: MeshBuilder,
+  lot: Lot,
+  base: Vector3,
+  halfAlong: number,
+  halfDepth: number,
+  rand: () => number,
+): void {
+  const height = 5.5 + rand() * 1.5;
+  // 製材の建屋 (奥)。
+  addBox(
+    mb,
+    base.clone().addScaledVector(UP, height / 2).addScaledVector(lot.outward, halfDepth * 0.5),
+    lot.along,
+    UP,
+    lot.outward,
+    { x: halfAlong * 0.6, y: height / 2, z: halfDepth * 0.42 },
+    [0.6, 0.56, 0.5],
+  );
+  // 丸太の山 (道路側)。段ごとに 1 本ずつ減らして三角に積む。
+  const stacks = 2 + Math.floor(rand() * 2);
+  for (let stack = 0; stack < stacks; stack++) {
+    const at = -halfAlong * 0.7 + (stack * halfAlong * 1.4) / Math.max(1, stacks - 1 || 1);
+    for (let layer = 0; layer < 3; layer++) {
+      addBox(
+        mb,
+        base
+          .clone()
+          .addScaledVector(UP, 0.45 + layer * 0.8)
+          .addScaledVector(lot.along, at)
+          .addScaledVector(lot.outward, -halfDepth * 0.45),
+        lot.along,
+        UP,
+        lot.outward,
+        { x: 1.6 - layer * 0.35, y: 0.4, z: 1.5 },
+        [0.52, 0.38, 0.24],
+      );
+    }
+  }
+}
+
+/** 漁港。岸へ向かって桟橋を伸ばし、陸側に番屋を置く。 */
+function buildFishery(
+  mb: MeshBuilder,
+  lot: Lot,
+  base: Vector3,
+  halfAlong: number,
+  halfDepth: number,
+  rand: () => number,
+): void {
+  const height = 4.2 + rand();
+  // 番屋。
+  addBox(
+    mb,
+    base.clone().addScaledVector(UP, height / 2),
+    lot.along,
+    UP,
+    lot.outward,
+    { x: halfAlong * 0.7, y: height / 2, z: halfDepth * 0.5 },
+    [0.66, 0.68, 0.7],
+  );
+  addGableRoof(
+    mb,
+    base.clone().addScaledVector(UP, height),
+    lot,
+    halfAlong * 0.75,
+    halfDepth * 0.55,
+    1.2,
+    [0.3, 0.36, 0.42],
+  );
+  // 桟橋。敷地の奥 (水側) へ板を渡し、杭で支える。
+  const deck = halfDepth * 0.9;
+  addBox(
+    mb,
+    base.clone().addScaledVector(UP, 0.7).addScaledVector(lot.outward, halfDepth * 0.5 + deck / 2),
+    lot.along,
+    UP,
+    lot.outward,
+    { x: halfAlong * 0.35, y: 0.18, z: deck / 2 },
+    [0.56, 0.48, 0.38],
+  );
+  for (let pile = 0; pile < 3; pile++) {
+    addBox(
+      mb,
+      base
+        .clone()
+        .addScaledVector(UP, 0.35)
+        .addScaledVector(lot.outward, halfDepth * 0.5 + (deck * (pile + 0.5)) / 3),
+      lot.along,
+      UP,
+      lot.outward,
+      { x: 0.2, y: 0.35, z: 0.2 },
+      [0.42, 0.36, 0.3],
+    );
+  }
+}
+
+/** 鉱山。櫓 (headframe) とずり山。遠くからでも「掘っている」と分かる形。 */
+function buildMine(
+  mb: MeshBuilder,
+  lot: Lot,
+  base: Vector3,
+  halfAlong: number,
+  halfDepth: number,
+  rand: () => number,
+): void {
+  // 巻き上げの建屋。
+  addBox(
+    mb,
+    base.clone().addScaledVector(UP, 2.6).addScaledVector(lot.outward, halfDepth * 0.45),
+    lot.along,
+    UP,
+    lot.outward,
+    { x: halfAlong * 0.55, y: 2.6, z: halfDepth * 0.35 },
+    [0.58, 0.55, 0.5],
+  );
+  // 櫓。4 本の脚と頭。
+  const tower = 9 + rand() * 3;
+  const spread = Math.min(2.4, halfAlong * 0.5);
+  for (const [a, b] of [
+    [-1, -1],
+    [1, -1],
+    [-1, 1],
+    [1, 1],
+  ] as const) {
+    addBox(
+      mb,
+      base
+        .clone()
+        .addScaledVector(UP, tower / 2)
+        .addScaledVector(lot.along, a * spread)
+        .addScaledVector(lot.outward, b * spread * 0.6 - halfDepth * 0.25),
+      lot.along,
+      UP,
+      lot.outward,
+      { x: 0.22, y: tower / 2, z: 0.22 },
+      STEEL,
+    );
+  }
+  addBox(
+    mb,
+    base.clone().addScaledVector(UP, tower).addScaledVector(lot.outward, -halfDepth * 0.25),
+    lot.along,
+    UP,
+    lot.outward,
+    { x: spread + 0.4, y: 0.9, z: spread * 0.6 + 0.4 },
+    STEEL,
+  );
+  // ずり山。掘った土は敷地の隅に積む。
+  addBox(
+    mb,
+    base
+      .clone()
+      .addScaledVector(UP, 1.4)
+      .addScaledVector(lot.along, halfAlong * 0.7 * (rand() < 0.5 ? -1 : 1))
+      .addScaledVector(lot.outward, halfDepth * 0.6),
+    lot.along,
+    UP,
+    lot.outward,
+    { x: 2.2, y: 1.4, z: 1.8 },
+    [0.45, 0.4, 0.34],
   );
 }
 
