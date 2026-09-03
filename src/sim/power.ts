@@ -4,13 +4,37 @@ import { BuildingType, type TileIndex } from '../core/types';
 import { specFor, type Building } from '../world/buildings';
 import type { World } from '../world/world';
 
+/** One connected road network, and what the buildings hanging off it need. */
+export interface GridSummary {
+  id: number;
+  supply: number;
+  demand: number;
+  /** Buildings on this network that the supply did not reach. */
+  unpowered: number;
+}
+
 export interface GridReport {
   /** One entry per connected road network that has anything on it. */
   grids: number;
   supply: number;
   demand: number;
+  /**
+   * Demand the plants could not meet, summed per network.
+   *
+   * Not `demand - supply`: power does not travel between two unconnected road
+   * networks, so a city with a spare plant in the north and a dark district in
+   * the south is short of power even though its totals balance. Summing the
+   * per-network shortfalls is the number that tells the player to build.
+   */
+  shortfall: number;
   /** Buildings left dark, either off-grid or short of capacity. */
   unpowered: number;
+  /** ...of which are not connected to any road at all, so have no cable. */
+  offGrid: number;
+  /** Power stations that are actually generating. */
+  plants: number;
+  /** The networks with anything on them, worst shortfall first. */
+  networks: GridSummary[];
 }
 
 /**
@@ -34,7 +58,7 @@ export class PowerGrid {
   private roadsVersion = -1;
   private gridCount = 0;
 
-  report: GridReport = { grids: 0, supply: 0, demand: 0, unpowered: 0 };
+  report: GridReport = emptyReport();
 
   /**
    * Recompute who has power. Called on a slow cadence: the answer only changes
@@ -43,6 +67,7 @@ export class PowerGrid {
   update(world: World): void {
     this.refreshComponents(world);
 
+    let plants = 0;
     const supply = new Float64Array(this.gridCount + 1);
     const demand = new Float64Array(this.gridCount + 1);
     const members: Building[][] = [];
@@ -57,6 +82,7 @@ export class PowerGrid {
         continue;
       }
       if (b.type === BuildingType.PowerPlant) {
+        plants++;
         // A plant needs its own staff to run, so a city that cannot fill the
         // jobs cannot run the plant at full output either -- but never at
         // nothing, or a brand new plant could never power the homes whose
@@ -71,8 +97,10 @@ export class PowerGrid {
     }
 
     let unpowered = 0;
+    const networks: GridSummary[] = [];
     for (let grid = 0; grid <= this.gridCount; grid++) {
       let remaining = supply[grid];
+      let dark = 0;
       for (const b of members[grid]) {
         const draw = specFor(b.type).power;
         if (remaining >= draw) {
@@ -80,26 +108,41 @@ export class PowerGrid {
           b.powered = true;
         } else {
           b.powered = false;
-          unpowered++;
+          dark++;
         }
+      }
+      unpowered += dark;
+      if (supply[grid] > 0 || demand[grid] > 0) {
+        networks.push({ id: grid, supply: supply[grid], demand: demand[grid], unpowered: dark });
       }
     }
 
     let totalSupply = 0;
     let totalDemand = 0;
+    let shortfall = 0;
     for (let grid = 0; grid <= this.gridCount; grid++) {
       totalSupply += supply[grid];
       totalDemand += demand[grid];
+      shortfall += Math.max(0, demand[grid] - supply[grid]);
     }
+    let offGrid = 0;
     for (const b of world.buildings) {
-      if (b.alive && !b.powered && this.gridFor(world, b) < 0) unpowered++;
+      if (b.alive && !b.powered && this.gridFor(world, b) < 0) offGrid++;
     }
 
+    // Worst first: the network the player has to do something about is the
+    // one at the top of the list, not the one that happens to be grid 0.
+    networks.sort((a, b) => (b.demand - b.supply) - (a.demand - a.supply));
+
     this.report = {
-      grids: this.gridCount,
+      grids: networks.length,
       supply: totalSupply,
       demand: totalDemand,
-      unpowered,
+      shortfall,
+      unpowered: unpowered + offGrid,
+      offGrid,
+      plants,
+      networks,
     };
   }
 
@@ -139,4 +182,17 @@ export class PowerGrid {
       }
     }
   }
+}
+
+function emptyReport(): GridReport {
+  return {
+    grids: 0,
+    supply: 0,
+    demand: 0,
+    shortfall: 0,
+    unpowered: 0,
+    offGrid: 0,
+    plants: 0,
+    networks: [],
+  };
 }

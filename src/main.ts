@@ -13,9 +13,12 @@ import type { Citizen } from './sim/citizen';
 import type { Lorry } from './sim/lorry';
 import { Simulation } from './sim/simulation';
 import { attachInput } from './ui/input';
-import { Hud } from './ui/hud';
+import { Hud, type PanelId } from './ui/hud';
 import { Inspector } from './ui/inspector';
 import { StatsPanel } from './ui/stats';
+import { PowerPanel } from './ui/power';
+import { WarningsPanel } from './ui/warnings';
+import { InfoWindow } from './ui/window';
 import { applyTool, isDragTool, Tool, TOOL_BY_KEY } from './ui/tools';
 import { BudgetPanel } from './ui/budget';
 import type { Overlay } from './render/renderer';
@@ -26,10 +29,25 @@ import { World } from './world/world';
 
 const canvas = document.getElementById('map') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
-const hudRoot = document.getElementById('hud')!;
-const inspectorRoot = document.getElementById('inspector')!;
-const statsRoot = document.getElementById('stats')!;
-const budgetRoot = document.getElementById('budget')!;
+const topbarRoot = document.getElementById('topbar')!;
+const toolbarRoot = document.getElementById('toolbar')!;
+const windowLayer = document.getElementById('windows')!;
+
+/**
+ * The information windows, laid out so that the two a new player needs -- what
+ * they clicked on, and what is wrong with the city -- start open on opposite
+ * sides, and the rest are a button away.
+ */
+const right = (width: number): number => Math.max(12, window.innerWidth - width - 12);
+const windows: Record<PanelId, InfoWindow> = {
+  inspector: new InfoWindow(windowLayer, 'inspector', '詳細', { x: 12, y: 12, width: 320 }),
+  warnings: new InfoWindow(windowLayer, 'warnings', '警告', {
+    x: right(340), y: 12, width: 340,
+  }),
+  power: new InfoWindow(windowLayer, 'power', '電力', { x: 350, y: 40, width: 300 }),
+  budget: new InfoWindow(windowLayer, 'budget', '財政', { x: 670, y: 70, width: 300 }),
+  stats: new InfoWindow(windowLayer, 'stats', '統計', { x: right(700), y: 100, width: 320 }),
+};
 
 /**
  * The simulation is a `let` rather than a `const` because loading a save
@@ -40,9 +58,13 @@ const budgetRoot = document.getElementById('budget')!;
 let sim = new Simulation(new World(20260831));
 const camera = new Camera();
 const renderer = new Renderer(ctx, camera);
-const inspector = new Inspector(inspectorRoot);
-const statsPanel = new StatsPanel(statsRoot);
-const budgetPanel = new BudgetPanel(budgetRoot, {
+const inspector = new Inspector(windows.inspector.body);
+const statsPanel = new StatsPanel(windows.stats.body);
+const powerPanel = new PowerPanel(windows.power.body);
+const warningsPanel = new WarningsPanel(windows.warnings.body, {
+  onShowMe: (tile) => showTile(tile),
+});
+const budgetPanel = new BudgetPanel(windows.budget.body, {
   onRate: (category, delta) => sim.economy.setRate(category, sim.economy.rates[category] + delta),
   onBorrow: () => say(sim.economy.borrow() ? '借入しました' : 'これ以上は借りられません'),
   onRepay: () => say(sim.economy.repay() ? '返済しました' : '返済できる残高がありません'),
@@ -50,8 +72,14 @@ const budgetPanel = new BudgetPanel(budgetRoot, {
 
 let tool: Tool = Tool.Road;
 let showZones = true;
+/** Warning badges over failing buildings. On by default: they are the point. */
+let showIssues = true;
 let overlay: Overlay = 'none';
 let hoverTile: TileIndex = -1;
+
+/** A tile the warnings panel asked to be shown, ringed until it is stale. */
+let focusTile: TileIndex = -1;
+let focusUntil = 0;
 
 /** Stations picked so far with the line tool, in order. */
 let pendingStations: BuildingId[] = [];
@@ -63,13 +91,14 @@ function say(message: string): void {
   noticeUntil = performance.now() + 4000;
 }
 
-const hud = new Hud(hudRoot, {
+const hud = new Hud(topbarRoot, toolbarRoot, {
   onTool: (t) => {
     tool = t;
     if (t !== Tool.Line) pendingStations = [];
   },
   onSpeed: (i) => sim.clock.setSpeedIndex(i),
   onToggleZones: () => (showZones = !showZones),
+  onToggleIssues: () => (showIssues = !showIssues),
   onOverlay: (o) => (overlay = overlay === o ? 'none' : o),
   onPickRandom: pickRandomCitizen,
   onCommitLine: commitLine,
@@ -78,8 +107,19 @@ const hud = new Hud(hudRoot, {
   },
   onSave: saveCity,
   onLoad: loadCity,
+  onPanel: (panel) => windows[panel].toggle(),
 });
 hud.setSaveAvailable(hasSavedCity());
+windows.inspector.open();
+windows.warnings.open();
+
+/** Take the camera to a tile and ring it, so "見る" actually shows something. */
+function showTile(tile: TileIndex): void {
+  if (tile < 0) return;
+  camera.centerOn(tileX(tile) + 0.5, tileY(tile) + 0.5);
+  focusTile = tile;
+  focusUntil = performance.now() + 6000;
+}
 
 seedStartingTown();
 camera.centerOn(92, 64);
@@ -179,6 +219,14 @@ function loadCity(): void {
   }
 }
 
+function openWindows(): Set<PanelId> {
+  const open = new Set<PanelId>();
+  for (const id of Object.keys(windows) as PanelId[]) {
+    if (windows[id].isOpen) open.add(id);
+  }
+  return open;
+}
+
 function resize(): void {
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth;
@@ -187,6 +235,7 @@ function resize(): void {
   canvas.height = Math.round(h * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   camera.resize(w, h);
+  for (const id of Object.keys(windows) as PanelId[]) windows[id].clampIntoView();
 }
 window.addEventListener('resize', resize);
 resize();
@@ -198,6 +247,7 @@ function selectAt(wx: number, wy: number): void {
   const building = bid >= 0 ? sim.world.buildings[bid] : undefined;
   if (building && building.alive) {
     inspector.selectStation(building);
+    windows.inspector.open();
     return;
   }
   selectNearestCitizen(wx, wy);
@@ -241,6 +291,7 @@ function selectNearestCitizen(wx: number, wy: number): void {
 
   if (bestLorry) inspector.selectLorry(bestLorry);
   else if (bestCitizen) inspector.select(bestCitizen);
+  if (bestLorry || bestCitizen) windows.inspector.open();
 }
 
 function pickRandomCitizen(): void {
@@ -251,6 +302,7 @@ function pickRandomCitizen(): void {
   if (pool.length === 0) return;
   const c = pool[Math.floor(Math.random() * pool.length)];
   inspector.select(c);
+  windows.inspector.open();
   camera.centerOn(c.x, c.y);
 }
 
@@ -458,19 +510,39 @@ function frame(now: number): void {
     camera.centerOn(inspector.selected.x, inspector.selected.y);
   }
 
+  if (now > focusUntil) focusTile = -1;
+
   renderer.draw(sim, sim.clock.alpha, {
     showZones,
+    showIssues,
     overlay,
     hoverTile,
+    focusTile,
     selected: inspector.selected,
     pendingStations,
   });
 
   if (now > noticeUntil) notice = '';
-  hud.update(sim, tool, overlay, pendingStations, notice);
-  inspector.update(sim);
-  statsPanel.update(sim, now);
-  budgetPanel.update(sim, now);
+  hud.update(sim, {
+    tool,
+    overlay,
+    showZones,
+    showIssues,
+    pendingStations,
+    notice,
+    openPanels: openWindows(),
+  });
+
+  // Only the windows the player can actually see are worth rebuilding: a
+  // closed panel that keeps formatting numbers is pure work per frame.
+  if (windows.inspector.isVisible) {
+    inspector.update(sim);
+    windows.inspector.setTitle(inspector.title);
+  }
+  if (windows.stats.isVisible) statsPanel.update(sim, now);
+  if (windows.budget.isVisible) budgetPanel.update(sim, now);
+  if (windows.power.isVisible) powerPanel.update(sim, now);
+  if (windows.warnings.isVisible) warningsPanel.update(sim, now);
 
   requestAnimationFrame(frame);
 }

@@ -20,6 +20,34 @@ const SHOP_REACH = 8;
  * industrial estate next to the housing a mistake the player can watch unfold
  * rather than a rule they are told about.
  */
+/**
+ * Why a tile is worth what it is: the same terms `update` sums, kept apart so
+ * the panel can show the player which of their decisions moved the number.
+ *
+ * Every field is in land-value points, and they add up: `base` plus the four
+ * amenities minus `noise` is the value the tile is heading towards.
+ */
+export interface LandValueFactors {
+  /** What bare, unimproved, quiet ground is worth. */
+  base: number;
+  /** Being near open water. */
+  water: number;
+  /** Standing on wooded ground. */
+  greenery: number;
+  /** Being within walking distance of a station. */
+  station: number;
+  /** ...of shops. */
+  shops: number;
+  /** ...of offices. */
+  offices: number;
+  /** Traffic, industry and railways. Negative: noise takes value away. */
+  noise: number;
+  /** Where the tile is heading: base + amenities - noise, clamped to 0..100. */
+  target: number;
+  /** Where it is now. Land value moves slowly, so the two differ. */
+  current: number;
+}
+
 export class LandValueField {
   private readonly value = new Float32Array(MAP_SIZE * MAP_SIZE).fill(40);
 
@@ -51,6 +79,50 @@ export class LandValueField {
     return tile >= 0 ? this.value[tile] : 0;
   }
 
+  /**
+   * The breakdown for one tile, recomputed from the same sources and the same
+   * falloff `update` uses -- so what the panel says raised a tile's value is
+   * exactly what did raise it, rather than a second model that can drift.
+   *
+   * Recomputed on demand rather than stored: this runs for the one tile the
+   * player has clicked on, where a per-tile record for all 65,536 tiles times
+   * seven factors would be paid for on every field update.
+   */
+  factorsAt(world: World, noise: NoiseField, tile: TileIndex): LandValueFactors {
+    let water = 0;
+    for (const near of within(tile, WATER_REACH)) {
+      if (world.map.isWater(near)) water += 10 * falloff(tile, near, WATER_REACH);
+    }
+    const greenery = world.map.getResource(tile) === Resource.Forest ? 6 : 0;
+
+    let station = 0;
+    let shops = 0;
+    let offices = 0;
+    for (const b of world.buildings) {
+      if (!b.alive) continue;
+      if (b.type === BuildingType.Station) {
+        station += 22 * falloff(tile, b.tile, STATION_REACH);
+      } else if (b.type === BuildingType.Shop) {
+        shops += 8 * falloff(tile, b.tile, SHOP_REACH);
+      } else if (b.type === BuildingType.Office) {
+        offices += 4 * falloff(tile, b.tile, SHOP_REACH);
+      }
+    }
+
+    const penalty = noise.at(tile) * 0.6;
+    return {
+      base: 40,
+      water,
+      greenery,
+      station,
+      shops,
+      offices,
+      noise: -penalty,
+      target: clamp(40 + water + greenery + station + shops + offices - penalty),
+      current: this.at(tile),
+    };
+  }
+
   /** Mean value over the tiles people actually live on. */
   meanResidential(world: World): number {
     let sum = 0;
@@ -71,6 +143,23 @@ export class LandValueField {
   restore(values: Float32Array): void {
     this.value.set(values.subarray(0, this.value.length));
   }
+}
+
+/** The tiles within `radius` of `tile`, the disc `spread` writes into. */
+function* within(tile: TileIndex, radius: number): Generator<TileIndex> {
+  const cx = tileX(tile);
+  const cy = tileY(tile);
+  for (let y = Math.max(0, cy - radius); y <= Math.min(MAP_SIZE - 1, cy + radius); y++) {
+    for (let x = Math.max(0, cx - radius); x <= Math.min(MAP_SIZE - 1, cx + radius); x++) {
+      if (Math.hypot(x - cx, y - cy) <= radius) yield idx(x, y);
+    }
+  }
+}
+
+/** The share of a source's strength that reaches `tile`, 0 outside the disc. */
+function falloff(tile: TileIndex, source: TileIndex, radius: number): number {
+  const d = Math.hypot(tileX(tile) - tileX(source), tileY(tile) - tileY(source));
+  return d > radius ? 0 : 1 - d / (radius + 1);
 }
 
 function spread(field: Float32Array, tile: TileIndex, amount: number, radius: number): void {

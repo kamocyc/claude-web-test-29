@@ -3,6 +3,7 @@ import type { Simulation } from '../sim/simulation';
 import type { LiveStats, TripStats } from '../sim/statistics';
 import { vacantDwellings } from '../sim/happiness';
 import { ticksToMinutes } from '../core/clock';
+import { bar, note, row, section } from './widgets';
 
 /** Rebuilt a few times a second; every frame would be wasted DOM work. */
 const REFRESH_MS = 250;
@@ -22,11 +23,9 @@ export class StatsPanel {
 
   constructor(root: HTMLElement) {
     root.innerHTML = '';
-    const title = document.createElement('h2');
-    title.textContent = '市民の統計';
     this.body = document.createElement('div');
     this.body.className = 'stats-body';
-    root.append(title, this.body);
+    root.append(this.body);
   }
 
   update(sim: Simulation, now = performance.now()): void {
@@ -44,13 +43,13 @@ export class StatsPanel {
         row('求人', `${sim.world.jobCount - sim.world.employedCount} 件`),
       ]),
       section('いま何をしているか', [
-        bar('在宅', live.atHome, live.population, '#5fa8d3'),
-        bar('勤務中', live.atWork, live.population, '#e0a458'),
-        bar('移動中', live.travelling, live.population, '#3ddc7f'),
-        bar('買い物中', live.shopping, live.population, '#8fc95c'),
-    bar('駅で待ち', live.waiting, live.population, '#c8b6e2'),
-        bar('乗車中', live.riding, live.population, '#8f7fd6'),
-        bar('経路なし', live.stranded, live.population, '#ff4d5e'),
+        bar('在宅', live.atHome, live.population, '#8ed64a'),
+        bar('勤務中', live.atWork, live.population, '#e0c33c'),
+        bar('移動中', live.travelling, live.population, '#4ade80'),
+        bar('買い物中', live.shopping, live.population, '#4fa3e3'),
+        bar('駅で待ち', live.waiting, live.population, '#c58fe0'),
+        bar('乗車中', live.riding, live.population, '#9b8ce0'),
+        bar('経路なし', live.stranded, live.population, '#ff5252'),
       ]),
       section('移動手段（外出中）', modeRows(live)),
       wellbeingSection(sim),
@@ -75,11 +74,11 @@ function wellbeingSection(sim: Simulation): HTMLElement {
   const migration = sim.happiness.lastMigration;
   return section('幸福度', [
     bar('総合', Math.round(h.overall), 100, moodColor(h.overall)),
-    bar('　住環境', Math.round(h.housing), 100, '#5fa8d3'),
-    bar('　通勤', Math.round(h.commute), 100, '#e0a458'),
-    bar('　雇用', Math.round(h.employment), 100, '#3ddc7f'),
-    bar('　食料', Math.round(h.services), 100, '#d99ae0'),
-    bar('　電気', Math.round(h.power), 100, '#f0d24a'),
+    bar('　住環境', Math.round(h.housing), 100, '#8ed64a'),
+    bar('　通勤', Math.round(h.commute), 100, '#e0c33c'),
+    bar('　雇用', Math.round(h.employment), 100, '#4ade80'),
+    bar('　食料', Math.round(h.services), 100, '#4fa3e3'),
+    bar('　電気', Math.round(h.power), 100, '#f2d64b'),
     row('直近1時間の移住', `+${migration.movedIn} / -${migration.movedOut} 人`),
     row('住宅の空き', `${vacantDwellings(sim.world)} 戸`),
   ]);
@@ -106,8 +105,10 @@ function citySection(sim: Simulation): HTMLElement {
   const power = sim.power.report;
   const chain = sim.chain.report;
   const rows = [
-    row('電力', `需要 ${Math.round(power.demand)} ／ 供給 ${Math.round(power.supply)}`),
-    row('　停電中の建物', `${power.unpowered} 件`),
+    row('電力', `供給 ${Math.round(power.supply)} ／ 需要 ${Math.round(power.demand)}`),
+    row('　不足', power.shortfall > 0 ? `${Math.round(power.shortfall)}` : 'なし',
+      power.shortfall > 0),
+    row('　停電中の建物', `${power.unpowered} 件`, power.unpowered > 0),
     row('平均地価', `${Math.round(sim.landValue.meanResidential(sim.world))} / 100`),
     row('食料のある世帯', `${Math.round(sim.chain.serviceLevel(sim.world) * 100)}%`),
     row('　一次産業の産出', `${chain.rawProduced.toFixed(0)} / 時`),
@@ -120,18 +121,18 @@ function citySection(sim: Simulation): HTMLElement {
 }
 
 function moodColor(score: number): string {
-  if (score >= 60) return '#3ddc7f';
-  if (score >= 40) return '#e0a458';
-  return '#ff4d5e';
+  if (score >= 60) return '#4ade80';
+  if (score >= 40) return '#ffb02e';
+  return '#ff5252';
 }
 
 function modeRows(live: LiveStats): HTMLElement[] {
   const travelling = live.walking + live.driving + live.usingTransit;
   if (travelling === 0) return [note('いま外出している市民はいません')];
   return [
-    bar('徒歩', live.walking, travelling, '#d8dee9'),
-    bar('車', live.driving, travelling, '#e0a458'),
-    bar('電車', live.usingTransit, travelling, '#4ea3e0'),
+    bar('徒歩', live.walking, travelling, '#e8eef5'),
+    bar('車', live.driving, travelling, '#e0c33c'),
+    bar('電車', live.usingTransit, travelling, '#c58fe0'),
   ];
 }
 
@@ -157,58 +158,6 @@ function lineSection(sim: Simulation): HTMLElement {
     return el;
   });
   return section('路線', rows);
-}
-
-function section(title: string, children: HTMLElement[]): HTMLElement {
-  const wrap = document.createElement('section');
-  const h = document.createElement('h3');
-  h.textContent = title;
-  wrap.append(h, ...children);
-  return wrap;
-}
-
-function row(label: string, value: string): HTMLElement {
-  const el = document.createElement('div');
-  el.className = 'stat-row';
-  const k = document.createElement('span');
-  k.className = 'stat-key';
-  k.textContent = label;
-  const v = document.createElement('span');
-  v.className = 'stat-value';
-  v.textContent = value;
-  el.append(k, v);
-  return el;
-}
-
-/** A labelled proportion bar; the number is always shown next to it. */
-function bar(label: string, value: number, total: number, color: string): HTMLElement {
-  const el = document.createElement('div');
-  el.className = 'stat-bar';
-
-  const k = document.createElement('span');
-  k.className = 'stat-key';
-  k.textContent = label;
-
-  const track = document.createElement('div');
-  track.className = 'stat-track';
-  const fill = document.createElement('div');
-  fill.style.width = `${total === 0 ? 0 : Math.round((value / total) * 100)}%`;
-  fill.style.background = color;
-  track.appendChild(fill);
-
-  const v = document.createElement('span');
-  v.className = 'stat-value';
-  v.textContent = `${value}`;
-
-  el.append(k, track, v);
-  return el;
-}
-
-function note(text: string): HTMLElement {
-  const el = document.createElement('p');
-  el.className = 'stat-note';
-  el.textContent = text;
-  return el;
 }
 
 function tripMode(trips: TripStats, mode: TravelMode): string {

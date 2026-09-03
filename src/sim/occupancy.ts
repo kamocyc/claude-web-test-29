@@ -116,32 +116,45 @@ export class Occupancy {
   }
 
   /**
-   * Distance from the entry of `tile` to the nearest blocking car inside it,
-   * for a driver about to enter heading `dir`.
+   * Distance from the entry of `tile` to the nearest vehicle queued inside it
+   * in the same direction, for a driver about to enter heading `dir`.
    *
-   * `ignoreCrossing` is the deadlock escape: two queues meeting at an
-   * intersection can each hold the other's lead car stationary forever, since
-   * neither is over the tile capacity -- they are simply in each other's way.
-   * A car that has waited long enough stops yielding to crossing traffic.
-   * Same-direction cars are still respected, so the no-collision guarantee
-   * within a lane is never given up.
+   * Only same-direction vehicles are measured here, because only they are
+   * something to follow. Traffic crossing the tile is not a leader at any
+   * distance -- it is a reason to wait at the stop line, which is
+   * `crossingTraffic` below and is handled as a stop rather than as a gap.
    */
-  gapIntoTile(tile: TileIndex, dir: Direction, ignoreCrossing = false): number {
+  gapIntoTile(tile: TileIndex, dir: Direction): number {
     const list = this.tiles[tile];
     if (!list) return Infinity;
-    const opposite = (dir + 2) % 4;
     let best = Infinity;
     for (const o of list) {
-      if (o.dir === opposite) continue;
-      if (o.dir !== dir) {
-        if (ignoreCrossing) continue;
-        // Crossing traffic sits mid-tile regardless of its own progress.
-        if (0.5 < best) best = 0.5;
-        continue;
-      }
+      if (o.dir !== dir) continue;
       if (o.progress < best) best = o.progress;
     }
     return best;
+  }
+
+  /**
+   * Whether something is crossing `tile` in front of a driver heading `dir`.
+   *
+   * Yielding is deliberately a yes/no question answered at the stop line
+   * rather than a distance folded into the car-following gap. Treating the
+   * occupied box as a leader "half a tile in" made the decision depend on the
+   * length of the vehicle asking: a car (0.25 long) still had room to creep
+   * into the junction, while a lorry (0.45) did not, so lorries alone stalled
+   * at busy crossroads and inched forward a thousandth of a tile at a time --
+   * never moving, and never still enough for the gridlock release to notice.
+   * A stop line is the same distance for everybody.
+   */
+  crossingTraffic(tile: TileIndex, dir: Direction): boolean {
+    const list = this.tiles[tile];
+    if (!list) return false;
+    const opposite = (dir + 2) % 4;
+    for (const o of list) {
+      if (o.dir !== dir && o.dir !== opposite) return true;
+    }
+    return false;
   }
 }
 

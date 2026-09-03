@@ -51,21 +51,41 @@ describe('shopping trips', () => {
     const sim = new Simulation(compactCity());
     run(sim, TICKS_PER_DAY * 2);
 
-    const shoppersNow = (): number => sim.world.citizens.filter(
-      (c) => c.state === CitizenState.ToShop || c.state === CitizenState.AtShop,
-    ).length;
+    // Counted as departures rather than as heads on the road, because the two
+    // ask different questions: how many people are out shopping at 3am also
+    // depends on how long the journey home takes, and this test is about when
+    // people decide to go, which is the thing the schedule controls.
+    const outShopping = new Set<number>();
+    let smallHoursDepartures = 0;
+    let eveningDepartures = 0;
+    let smallHoursHeads = 0;
+    let eveningHeads = 0;
 
-    let smallHours = 0;
-    let evening = 0;
     for (let i = 0; i < TICKS_PER_DAY; i++) {
       sim.tick();
       const hour = sim.clock.hour;
-      if (hour >= 2 && hour < 6) smallHours = Math.max(smallHours, shoppersNow());
-      if (hour >= 18 && hour < 22) evening = Math.max(evening, shoppersNow());
+      const smallHours = hour >= 2 && hour < 6;
+      const evening = hour >= 18 && hour < 22;
+
+      const now = new Set<number>();
+      for (const c of sim.world.citizens) {
+        if (c.state !== CitizenState.ToShop && c.state !== CitizenState.AtShop) continue;
+        // Seeds rather than ids: ids are renumbered when somebody moves out.
+        now.add(c.seed);
+        if (outShopping.has(c.seed)) continue;
+        if (smallHours) smallHoursDepartures++;
+        if (evening) eveningDepartures++;
+      }
+      outShopping.clear();
+      for (const seed of now) outShopping.add(seed);
+
+      if (smallHours) smallHoursHeads = Math.max(smallHoursHeads, now.size);
+      if (evening) eveningHeads = Math.max(eveningHeads, now.size);
     }
 
-    expect(evening).toBeGreaterThan(smallHours);
-    expect(smallHours).toBe(0);
+    expect(eveningDepartures).toBeGreaterThan(0);
+    expect(smallHoursDepartures).toBe(0);
+    expect(eveningHeads).toBeGreaterThan(smallHoursHeads);
   });
 
   it('does not set out for a shop that has nothing on the shelf', () => {

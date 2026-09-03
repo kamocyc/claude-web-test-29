@@ -79,6 +79,43 @@ export const TILE_CAR_CAPACITY = 3;
  */
 export const GRIDLOCK_RELEASE_TICKS = 60;
 
+/**
+ * Below this fraction of its own free speed, a vehicle counts as not moving
+ * for the purposes of the gridlock release above.
+ *
+ * It is a fraction rather than an absolute so a lorry and a car agree on what
+ * "stopped" means. 2% of free speed is one tile every few hundred ticks: not
+ * a slow crawl in traffic, but a vehicle that is going nowhere.
+ */
+export const GRIDLOCK_CRAWL_RATIO = 0.02;
+
+/**
+ * How far short of a tile boundary a vehicle holds at a red light or a closed
+ * level crossing.
+ *
+ * It has to be more than nothing. A vehicle told to stop exactly *on* the
+ * boundary converges onto it within a few ticks and is then, by definition,
+ * inside the tile it was waiting to enter -- so a red light leaked a car every
+ * few ticks. Holding a fiftieth of a tile short keeps the vehicle in its
+ * approach, where the rule it is obeying still applies to it.
+ */
+export const STOP_LINE_SETBACK = 0.02;
+
+/**
+ * How far into an occupied junction a vehicle giving way may put its nose.
+ *
+ * Giving way is a slow-to-a-crawl rather than an absolute hold, because a
+ * queue in this model can legitimately be standing *inside* a junction box:
+ * refusing to enter until the box is clear turns a busy grid into a set of
+ * all-way stops and the city seizes up. What matters is that the distance is
+ * measured to the nose and is the same for every vehicle. Folding it into the
+ * car-following gap instead made it depend on the length of the vehicle
+ * asking, which let cars through and left lorries stalled at the same
+ * junction for the rest of the day.
+ */
+export const GIVE_WAY_NOSE_IN = 0.1;
+
+
 /** Trips shorter than this are walked instead of driven. */
 export const WALK_DISTANCE_THRESHOLD = 12;
 

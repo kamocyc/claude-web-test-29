@@ -63,7 +63,9 @@ describe('occupancy', () => {
     const occ = new Occupancy();
     occ.add(TILE, car(1, Direction.East, 0.3));
     expect(occ.gapIntoTile(TILE, Direction.East)).toBeCloseTo(0.3);
-    // Crossing traffic is treated as sitting mid-tile.
-    expect(occ.gapIntoTile(TILE, Direction.North)).toBeCloseTo(0.5);
+    // Traffic crossing the tile is not a car to queue behind: it is a reason
+    // to give way at the stop line, which `crossingTraffic` answers instead.
+    expect(occ.gapIntoTile(TILE, Direction.North)).toBe(Infinity);
+    expect(occ.crossingTraffic(TILE, Direction.North)).toBe(true);
   });
 });

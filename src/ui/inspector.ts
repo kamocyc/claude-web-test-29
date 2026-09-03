@@ -7,6 +7,8 @@ import { CargoKind, LorryState, type Lorry } from '../sim/lorry';
 import { departForHomeMinute, departForWorkMinute } from '../sim/schedule';
 import type { Simulation } from '../sim/simulation';
 import { industryOf, isHome, specFor, type Building } from '../world/buildings';
+import type { LandValueFactors } from '../sim/landValue';
+import { BUILDING_ISSUES, buildingIssue } from '../sim/diagnostics';
 import { Industry } from '../core/types';
 import { ZONE_LABELS } from '../world/zoneRules';
 
@@ -17,9 +19,15 @@ import { ZONE_LABELS } from '../world/zoneRules';
  * drift apart.
  */
 export class Inspector {
-  private readonly title: HTMLElement;
   private readonly body: HTMLElement;
   private readonly followBox: HTMLInputElement;
+
+  /**
+   * What is being inspected, for the window's own title bar. Kept here rather
+   * than written into the panel so the title is not repeated inside the body
+   * of the window that already carries it.
+   */
+  title = '詳細';
 
   selected: Citizen | null = null;
   /** A building the player clicked instead of a citizen. */
@@ -30,9 +38,6 @@ export class Inspector {
   constructor(root: HTMLElement) {
     root.innerHTML = '';
 
-    this.title = document.createElement('h2');
-    this.title.textContent = '市民';
-
     const follow = document.createElement('label');
     follow.className = 'follow';
     this.followBox = document.createElement('input');
@@ -42,7 +47,7 @@ export class Inspector {
     this.body = document.createElement('div');
     this.body.className = 'inspector-body';
 
-    root.append(this.title, follow, this.body);
+    root.append(follow, this.body);
   }
 
   get following(): boolean {
@@ -82,18 +87,18 @@ export class Inspector {
 
   update(sim: Simulation): void {
     if (this.selectedLorry) {
-      this.title.textContent = 'トラック';
+      this.title = 'トラック';
       this.updateLorry(sim, this.selectedLorry);
       return;
     }
     if (this.selectedStation) {
       const b = this.selectedStation;
-      this.title.textContent = b.type === BuildingType.Station ? '駅' : BUILDING_LABELS[b.type];
+      this.title = b.type === BuildingType.Station ? '駅' : BUILDING_LABELS[b.type];
       if (b.type === BuildingType.Station) this.updateStation(sim, b);
       else this.updateBuilding(sim, b);
       return;
     }
-    this.title.textContent = '市民';
+    this.title = '市民';
 
     const c = this.selected;
     if (!c) {
@@ -171,12 +176,37 @@ export class Inspector {
     if (home && home.alive) {
       this.body.appendChild(subheading('住環境'));
       this.body.appendChild(definitionList([
-        ['地価', `${Math.round(sim.landValue.at(home.tile))} / 100`],
         ['騒音', `${Math.round(sim.noise.at(home.tile))} / 100`],
         ['電気', home.powered ? '来ている' : '来ていない'],
         ['食料の備え', `${c.pantry.toFixed(1)} 日分${c.lastShopFailed ? '（前回買えず）' : ''}`],
       ]));
+      this.appendLandValue(sim, home.tile);
     }
+  }
+
+  /**
+   * What this tile's land value is made of.
+   *
+   * Land value is the one number in the game nobody sets: it is the sum of
+   * every other decision the player has made, which makes it the number they
+   * are most likely to want explained. Showing the terms turns "地価 62" into
+   * "駅が近い、でも工場の騒音で目減りしている", which is something to act on.
+   */
+  private appendLandValue(sim: Simulation, tile: number): void {
+    const f = sim.landValue.factorsAt(sim.world, sim.noise, tile);
+    this.body.appendChild(subheading(`地価 ${Math.round(f.current)} / 100 の内訳`));
+    this.body.appendChild(definitionList([
+      ['基準値', `${f.base}`],
+      ...LAND_VALUE_TERMS
+        .map(([key, label]) => [label, signedPoints(f[key])] as [string, string])
+        .filter(([, value]) => value !== '±0'),
+      ['→ 落ち着く先', `${Math.round(f.target)}`],
+    ]));
+    const hint = document.createElement('p');
+    hint.className = 'stat-note';
+    hint.textContent = '地価を上げるには、駅・商店を近くに、工場と幹線道路を遠くに。'
+      + '水辺と森も効きます。地価が低いと高密度住宅は建たず、住民の幸福度も下がります。';
+    this.body.appendChild(hint);
   }
 
   /**
@@ -229,7 +259,6 @@ export class Inspector {
       ['場所', address(b.tile)],
       [isHome(b.type) ? '居住者' : '従業員', `${b.occupants.length} / ${b.capacity} 人`],
       ['電気', b.powered ? `来ている（${spec.power}）` : '⚠ 来ていない'],
-      ['地価', `${Math.round(sim.landValue.at(b.tile))} / 100`],
       ['騒音', `${Math.round(sim.noise.at(b.tile))} / 100`],
     ];
 
@@ -264,7 +293,16 @@ export class Inspector {
     }
 
     this.body.innerHTML = '';
+    const issue = buildingIssue(b);
+    if (issue !== null) {
+      const style = BUILDING_ISSUES[issue];
+      const banner = document.createElement('p');
+      banner.className = `warning warning-${style.tone}`;
+      banner.textContent = `${style.icon} ${style.label} — ${style.advice}`;
+      this.body.appendChild(banner);
+    }
     this.body.appendChild(definitionList(rows));
+    this.appendLandValue(sim, b.tile);
   }
 
   /**
@@ -406,4 +444,21 @@ function formatMinute(m: number): string {
   const h = String(Math.floor(m / 60)).padStart(2, '0');
   const mm = String(m % 60).padStart(2, '0');
   return `${h}:${mm}`;
+}
+
+/** The amenities the land value model adds up, in the order it applies them. */
+const LAND_VALUE_TERMS: ReadonlyArray<[keyof LandValueFactors, string]> = [
+  ['water', '水辺'],
+  ['greenery', '森'],
+  ['station', '駅が近い'],
+  ['shops', '商店が近い'],
+  ['offices', 'オフィスが近い'],
+  ['noise', '騒音'],
+];
+
+/** Amenities are shown as what they add or take away, not as a total. */
+function signedPoints(value: number): string {
+  const rounded = Math.round(value);
+  if (rounded === 0) return '±0';
+  return rounded > 0 ? `+${rounded}` : `${rounded}`;
 }

@@ -2,6 +2,7 @@ import { LOAN_TRANCHE, TAX_RATE_LIMITS } from '../config';
 import type { Simulation } from '../sim/simulation';
 import type { TaxRates } from '../sim/economy';
 import { formatMoney, formatPercent } from './money';
+import { button, heading, row } from './widgets';
 
 const REFRESH_MS = 250;
 
@@ -33,11 +34,9 @@ export class BudgetPanel {
 
   constructor(root: HTMLElement, private readonly cb: BudgetCallbacks) {
     root.innerHTML = '';
-    const title = document.createElement('h2');
-    title.textContent = '財政';
     this.body = document.createElement('div');
     this.body.className = 'budget-body';
-    root.append(title, this.body);
+    root.append(this.body);
   }
 
   update(sim: Simulation, now = performance.now()): void {
@@ -99,33 +98,13 @@ export class BudgetPanel {
   }
 }
 
-function heading(text: string): HTMLElement {
-  const h = document.createElement('h3');
-  h.textContent = text;
-  return h;
-}
-
-function row(label: string, value: string, warn = false): HTMLElement {
-  const el = document.createElement('div');
-  el.className = 'stat-row';
-  const k = document.createElement('span');
-  k.className = 'stat-key';
-  k.textContent = label;
-  const v = document.createElement('span');
-  v.className = warn ? 'stat-value warn' : 'stat-value';
-  v.textContent = value;
-  el.append(k, v);
-  return el;
-}
-
 function signed(value: number): string {
   return `${value >= 0 ? '+' : ''}${formatMoney(value)}`;
 }
 
+/** A small button, for the rate steppers and the loan actions. */
 function action(label: string, onClick: () => void): HTMLButtonElement {
-  const b = document.createElement('button');
+  const b = button(label, onClick);
   b.className = 'small';
-  b.textContent = label;
-  b.addEventListener('click', onClick);
   return b;
 }

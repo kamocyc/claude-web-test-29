@@ -61,8 +61,12 @@ export function attachInput(
       lastY = e.clientY;
       return;
     }
+    // The toolbar and the information windows float over the map, so a
+    // pointer on one of them is not pointing at a tile: highlighting the tile
+    // hidden underneath a panel is worse than highlighting nothing.
+    const overMap = e.target === canvas;
     const tile = tileAt(e);
-    handlers.onHover(tile);
+    handlers.onHover(overMap ? tile : -1);
     if (painting && handlers.isDragging()) {
       movedWhilePainting = true;
       if (tile >= 0) handlers.onPaint(tile);
@@ -94,6 +98,10 @@ export function attachInput(
   );
 
   window.addEventListener('keydown', (e) => {
+    // A shortcut typed into a field is text, not a command.
+    const target = e.target as HTMLElement | null;
+    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
+
     const key = e.key.toLowerCase();
     const overlay = OVERLAY_KEYS[key];
     if (overlay) {

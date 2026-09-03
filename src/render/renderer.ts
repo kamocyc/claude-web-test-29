@@ -18,6 +18,7 @@ import {
   type TileIndex,
 } from '../core/types';
 import { SignalAxis } from '../sim/signals';
+import { BUILDING_ISSUES, buildingIssue, type BuildingIssue } from '../sim/diagnostics';
 import { CargoKind } from '../sim/lorry';
 import type { RoadAgent } from '../sim/vehicle';
 import { Resource } from '../core/types';
@@ -38,11 +39,17 @@ export interface RenderOptions {
   selected: Citizen | null;
   /** Stations picked so far in the line tool, highlighted while choosing. */
   pendingStations: readonly number[];
+  /** Whether to float warning badges over the buildings that have problems. */
+  showIssues: boolean;
+  /** A building to ring, because the player asked to be shown it. */
+  focusTile: TileIndex;
 }
 
 export class Renderer {
   /** Stations seen while drawing tiles, so their badges can go on top. */
   private readonly stationBadges: Array<{ id: number; x: number; y: number }> = [];
+  /** Failing buildings seen while drawing tiles, for the same reason. */
+  private readonly issueBadges: Array<{ issue: BuildingIssue; x: number; y: number }> = [];
 
   constructor(
     private readonly ctx: CanvasRenderingContext2D,
@@ -59,6 +66,7 @@ export class Renderer {
 
     const view = camera.visibleTiles();
     this.stationBadges.length = 0;
+    this.issueBadges.length = 0;
     this.drawTiles(sim, view, opts);
     this.drawLines(sim);
     this.drawSignals(sim, view);
@@ -66,7 +74,9 @@ export class Renderer {
     this.drawLorries(sim, alpha);
     this.drawTrains(sim, alpha);
     this.drawStationBadges(sim);
+    this.drawIssueBadges();
     this.drawPendingStations(sim, opts);
+    if (opts.focusTile >= 0) this.drawFocus(opts.focusTile);
     if (opts.selected) this.drawSelection(opts.selected, alpha);
     if (opts.hoverTile >= 0) this.drawHover(opts.hoverTile);
   }
@@ -111,6 +121,12 @@ export class Renderer {
             this.drawBuilding(p.x, p.y, z, b.type, fill);
             if (b.type === BuildingType.Station) {
               this.stationBadges.push({ id: b.id, x: p.x + z / 2, y: p.y });
+            }
+            if (opts.showIssues) {
+              const issue = buildingIssue(b);
+              if (issue !== null) {
+                this.issueBadges.push({ issue, x: p.x + z / 2, y: p.y });
+              }
             }
           }
         } else if (opts.showZones && map.zone[i] !== Zone.None) {
@@ -524,6 +540,68 @@ export class Renderer {
     }
   }
 
+  /**
+   * A warning sign floating over every building that has something wrong with
+   * it, in the colour of how bad it is.
+   *
+   * This is the whole point of having diagnostics at all: a dark factory and a
+   * working one used to look identical from above, so the only way to find the
+   * failure was to click on buildings one at a time. The badges bob gently
+   * because a static icon over a static building disappears into the map.
+   */
+  private drawIssueBadges(): void {
+    const { ctx, camera } = this;
+    const z = camera.zoom;
+    if (z < 5 || this.issueBadges.length === 0) return;
+
+    const size = Math.max(11, Math.min(22, z * 0.85));
+    const bob = Math.sin(performance.now() / 380) * size * 0.08;
+
+    for (const badge of this.issueBadges) {
+      const style = BUILDING_ISSUES[badge.issue];
+      const cx = badge.x;
+      const cy = badge.y - size * 0.55 + bob;
+
+      // A pin: a rounded chip with a little tail pointing at the building.
+      ctx.fillStyle = TONE_COLORS[style.tone];
+      ctx.beginPath();
+      ctx.arc(cx, cy, size / 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(cx - size * 0.18, cy + size * 0.34);
+      ctx.lineTo(cx + size * 0.18, cy + size * 0.34);
+      ctx.lineTo(cx, cy + size * 0.72);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.45)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(cx, cy, size / 2, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.fillStyle = COLORS.alertText;
+      ctx.font = `700 ${Math.round(size * 0.62)}px system-ui, "Noto Sans JP", sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(style.icon, cx, cy + size * 0.03);
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'alphabetic';
+    }
+  }
+
+  /** A ring around whatever the player asked the warnings panel to show them. */
+  private drawFocus(tile: TileIndex): void {
+    const { ctx, camera } = this;
+    const p = camera.worldToScreen(tileCenterX(tile), tileCenterY(tile));
+    const r = Math.max(10, camera.zoom * 0.9) + Math.sin(performance.now() / 240) * 3;
+    ctx.strokeStyle = COLORS.alertCritical;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
   /** A small dark chip with a number in it, sized off the zoom. */
   private drawBadge(cx: number, cy: number, text: string, z: number): void {
     const ctx = this.ctx;
@@ -680,4 +758,11 @@ const BUILDING_COLORS: Record<BuildingType, string> = {
   [BuildingType.Mine]: COLORS.mining,
   [BuildingType.Station]: COLORS.station,
   [BuildingType.PowerPlant]: COLORS.power,
+};
+
+/** Warning colours, keyed by the severity the diagnostics reported. */
+const TONE_COLORS: Record<'critical' | 'warning' | 'info', string> = {
+  critical: COLORS.alertCritical,
+  warning: COLORS.alertWarning,
+  info: COLORS.alertInfo,
 };

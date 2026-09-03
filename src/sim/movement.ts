@@ -1,5 +1,8 @@
 import {
+  GIVE_WAY_NOSE_IN,
+  GRIDLOCK_CRAWL_RATIO,
   GRIDLOCK_RELEASE_TICKS,
+  STOP_LINE_SETBACK,
   TILE_CAR_CAPACITY,
   WALK_SPEED,
 } from '../config';
@@ -71,32 +74,70 @@ export function advanceVehicle(
   c.prevX = c.x;
   c.prevY = c.y;
 
-  if (isDrivingSegment(world, c, seg)) {
+  const driving = isDrivingSegment(world, c, seg);
+  let hold: Hold = FREE_ROAD;
+  if (driving) {
     const dir = headingOf(c, seg) as Direction;
     const released = c.blockedTicks >= GRIDLOCK_RELEASE_TICKS;
-    const gap = gapToLeader(world, c, occ, seg, local, dir, released);
-    const stopDistance = distanceToStop(world, c, occ, crossings, signals, tick, seg, dir);
+    const gap = gapToLeader(world, c, occ, seg, local, dir);
+    hold = distanceToStop(world, c, occ, crossings, signals, tick, seg, dir, released);
 
     const free = c.profile.freeSpeed;
-    c.v = stepSpeed(c.v, desiredSpeed(free, gap, stopDistance, c.profile), free, c.profile);
-    c.blockedTicks = c.v < 1e-4 ? c.blockedTicks + 1 : 0;
+    c.v = stepSpeed(c.v, desiredSpeed(free, gap, hold.distance, c.profile), free, c.profile);
   } else {
     c.v = WALK_SPEED;
-    c.blockedTicks = 0;
   }
 
   c.s += c.v;
+  updateBlockedTicks(c, seg, driving, hold.mandatory);
 
   const end = path.length - 1;
   if (c.s >= end) {
     c.s = end;
     c.v = 0;
+    // Arriving is the strongest form of having got somewhere, so whatever the
+    // trip queued in is over: leaving the count standing would follow the
+    // traveller into their front door and out again on their next trip.
+    c.blockedTicks = 0;
     setPositionFromPath(c);
     return true;
   }
 
   setPositionFromPath(c);
   return false;
+}
+
+/**
+ * How long this vehicle has been going nowhere, which is what arms the
+ * gridlock release.
+ *
+ * Two things it deliberately is not. It is not a stopwatch on standing still:
+ * a vehicle inching forward a thousandth of a tile per tick is stuck by any
+ * measure a player would recognise, and testing for an exact standstill let
+ * such a vehicle reset the counter forever -- which is how a lorry could sit
+ * at a junction for the length of a working day. And it is not reset by the
+ * first twitch of movement: it clears when the vehicle actually gets
+ * somewhere, meaning into the next tile. A release that ended the moment the
+ * wheels turned would let a vehicle roll a hundredth of a tile, re-block
+ * itself just short of the junction, and start the whole wait again.
+ *
+ * Waiting at a red light or a closed level crossing is not being stuck at
+ * all, so it does not count: those holds have no release and never need one.
+ */
+function updateBlockedTicks(
+  c: RoadAgent,
+  seg: number,
+  driving: boolean,
+  mandatory: boolean,
+): void {
+  const path = c.path!;
+  const movedOn = Math.min(path.length - 2, Math.floor(c.s)) !== seg;
+  if (!driving || mandatory || movedOn) {
+    c.blockedTicks = 0;
+    return;
+  }
+  if (c.v >= c.profile.freeSpeed * GRIDLOCK_CRAWL_RATIO) return;
+  c.blockedTicks++;
 }
 
 function gapToLeader(
@@ -106,7 +147,6 @@ function gapToLeader(
   seg: number,
   local: number,
   dir: Direction,
-  released: boolean,
 ): number {
   const inTile = occ.gapAheadInTile(c.path![seg], dir, local, c.id);
   if (inTile !== Infinity) return inTile;
@@ -119,9 +159,21 @@ function gapToLeader(
   if (!world.map.isRoad(path[next])) return Infinity;
 
   const nextDir = next < path.length - 1 ? directionBetween(path[next], path[next + 1]) : dir;
-  const into = occ.gapIntoTile(path[next], nextDir === -1 ? dir : nextDir, released);
+  const into = occ.gapIntoTile(path[next], nextDir === -1 ? dir : nextDir);
   return into === Infinity ? Infinity : 1 - local + into;
 }
+
+/**
+ * Where a vehicle has to stop, and whether the thing stopping it is one it
+ * simply has to obey. A red light and a closed crossing are absolute; a full
+ * tile and traffic crossing in front of us are not, and have the release.
+ */
+interface Hold {
+  distance: number;
+  mandatory: boolean;
+}
+
+const FREE_ROAD: Hold = { distance: Infinity, mandatory: false };
 
 function distanceToStop(
   world: World,
@@ -132,32 +184,49 @@ function distanceToStop(
   tick: number,
   seg: number,
   dir: Direction,
-): number {
+  released: boolean,
+): Hold {
   const path = c.path!;
-  // Where driving ends and the walk to the front door begins.
+  // Where driving ends and the walk to the front door begins. This one is a
+  // destination rather than a hold, so it is the boundary itself: a vehicle
+  // that stopped short of it would never arrive.
   let stop = driveEndIndex(path) - c.s;
 
   const next = seg + 1;
   if (next <= driveEndIndex(path) && world.map.isRoad(path[next])) {
+    // A light or a barrier holds us just short of the tile, so that we are
+    // still in our own approach while we wait and the rule holding us keeps
+    // applying to us.
+    const line = next - c.s - STOP_LINE_SETBACK;
+
     // A closed level crossing is a hard stop, and unlike tile capacity it has
     // no release valve -- waiting longer must never let a car onto the rails.
     if (crossings.isClosed(path[next])) {
-      return Math.max(0, Math.min(stop, next - c.s));
+      return { distance: Math.max(0, Math.min(stop, line)), mandatory: true };
     }
     const nextDir = next < path.length - 1 ? directionBetween(path[next], path[next + 1]) : dir;
     // A red signal is the same kind of hard stop, and for the same reason:
     // the gridlock release must never be able to push a car through it.
     if (holdsAtSignal(c, signals, path[next], dir, tick, next - c.s)) {
-      return Math.max(0, Math.min(stop, next - c.s));
+      return { distance: Math.max(0, Math.min(stop, line)), mandatory: true };
     }
-    const blocked = occ.blockingCount(path[next], nextDir === -1 ? dir : nextDir);
+    const heading = nextDir === -1 ? dir : nextDir;
+    // Give way to whatever is crossing the tile we are about to enter: creep
+    // up to the mouth of the junction and no further while it is in use. Like
+    // the capacity below this is soft -- a vehicle held long enough goes
+    // anyway -- because two queues can otherwise hold each other at a
+    // junction forever, each of them merely in the other's way.
+    if (!released && occ.crossingTraffic(path[next], heading)) {
+      stop = Math.min(stop, next - c.s + GIVE_WAY_NOSE_IN);
+    }
+    const blocked = occ.blockingCount(path[next], heading);
     // Soft capacity: a car stuck long enough is let through anyway, so a ring
     // of mutually-blocking intersections drains instead of freezing forever.
-    if (blocked >= TILE_CAR_CAPACITY && c.blockedTicks < GRIDLOCK_RELEASE_TICKS) {
-      stop = Math.min(stop, next - c.s);
+    if (blocked >= TILE_CAR_CAPACITY && !released) {
+      stop = Math.min(stop, next - c.s + GIVE_WAY_NOSE_IN);
     }
   }
-  return Math.max(0, stop);
+  return { distance: Math.max(0, stop), mandatory: false };
 }
 
 /**

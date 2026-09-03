@@ -1,14 +1,30 @@
+/*
+ * The chrome, styled after Cities: Skylines: a dark blue-grey glass panel, a
+ * cyan accent, and colour used almost nowhere except where it means something
+ * -- the zone swatches, the money, and the warnings.
+ */
 :root {
-  --bg: #0d1117;
-  --panel: #161b22;
-  --border: #262d36;
-  --text: #d5dae1;
-  --muted: #8b949e;
-  --accent: #ffe066;
+  --bg: #0f1519;
+  --panel: rgba(24, 36, 46, 0.94);
+  --panel-solid: #182430;
+  --panel-raised: #22323f;
+  --border: #32485a;
+  --text: #dde6ee;
+  --muted: #90a4b6;
+  --accent: #35c3f0;
+  --accent-dark: #0b3d52;
+  --good: #4ade80;
+  --warn: #ffb02e;
+  --bad: #ff5252;
   color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
+
+/* The panels and bars are flex containers, and `display: flex` beats the
+   browser's own rule for [hidden]. Without this a "closed" window is still
+   on screen, just empty. */
+[hidden] { display: none !important; }
 
 html, body {
   margin: 0;
@@ -19,129 +35,259 @@ html, body {
   overflow: hidden;
 }
 
-#hud {
+/* --- Top bar: the city's vital signs -------------------------------------- */
+
+#topbar {
   display: flex;
   align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
-  padding: 8px 12px;
-  background: var(--panel);
+  gap: 14px;
+  height: 46px;
+  padding: 0 14px;
+  background: linear-gradient(180deg, #1d2c39 0%, #16222c 100%);
   border-bottom: 1px solid var(--border);
 }
 
 .hud-clock {
   font-variant-numeric: tabular-nums;
-  font-weight: 600;
-  min-width: 130px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  min-width: 132px;
 }
 
-.hud-stats {
-  color: var(--muted);
+.hud-money {
   font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--good);
+  min-width: 172px;
 }
+.hud-money.negative { color: var(--bad); }
+
+.hud-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.chip {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 2px 9px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.chip-label { color: var(--muted); font-size: 11px; }
+.chip-value { font-variant-numeric: tabular-nums; font-weight: 600; }
+.chip-value.warn { color: var(--bad); }
+
+/* The warning ticker is a button: it opens the list of everything wrong. */
+.hud-warning-button {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+  background: none;
+  border: none;
+  padding: 0 4px;
+  cursor: pointer;
+}
+.hud-warning-button:hover { background: rgba(255, 255, 255, 0.05); }
 
 .hud-warning {
-  color: #ff6b78;
-  flex: 1;
-  text-align: right;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hud-warning.critical { color: var(--bad); }
+.hud-warning.warning { color: var(--warn); }
+.hud-warning.info { color: var(--accent); }
+.hud-warning.notice { color: var(--text); }
+
+.hud-warning-count {
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--bad);
+  color: #12181d;
+  font-weight: 700;
+  font-size: 11px;
 }
 
 .hud-group { display: flex; gap: 4px; }
+.hud-speeds { margin-left: auto; }
 
-button {
-  background: #1f2630;
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 4px 9px;
-  font: inherit;
-  cursor: pointer;
-}
-button:hover { background: #2a323e; }
-button.active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #1a1a1a;
-  font-weight: 600;
-}
+/* --- Stage: the map, with everything else floating over it ---------------- */
 
-main {
-  display: flex;
-  height: calc(100% - 45px);
+#stage {
+  position: relative;
+  height: calc(100% - 46px);
   overflow: hidden;
 }
 
 #map {
-  flex: 1;
-  /* A canvas carries its pixel buffer as its intrinsic width, and a flex item
-     will not shrink below that by default -- so without this the canvas pushes
-     the page wider than the viewport and squeezes the inspector off-screen. */
-  min-width: 0;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   display: block;
   cursor: crosshair;
 }
 
-#sidebar {
-  width: 300px;
-  flex: none;
+#windows {
+  position: absolute;
+  inset: 0;
+  /* The layer itself must not eat clicks meant for the map; the windows in it
+     turn pointer events back on. */
+  pointer-events: none;
+}
+
+/* --- Bottom toolbar: what the player can build ---------------------------- */
+
+#toolbar {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  max-width: calc(100% - 20px);
+  padding: 8px 10px;
   background: var(--panel);
-  border-left: 1px solid var(--border);
-  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(6px);
 }
 
-#inspector,
-#stats,
-#budget {
-  padding: 12px 14px;
+.toolbar-groups {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
 }
 
-#stats,
-#budget {
-  border-top: 1px solid var(--border);
+.tool-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 0 8px;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
 }
+.tool-group:last-child { border-right: none; }
 
-#inspector h2,
-#stats h2,
-#budget h2 {
-  margin: 0 0 8px;
-  font-size: 14px;
-}
+.tool-group-body { display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; }
 
-#stats h3,
-#budget h3 {
-  margin: 12px 0 5px;
-  font-size: 12px;
+.tool-group-label {
   color: var(--muted);
-  font-weight: 600;
+  font-size: 10px;
+  letter-spacing: 0.08em;
 }
 
-#stats section:first-child h3 { margin-top: 0; }
-
-.hud-money {
-  font-variant-numeric: tabular-nums;
-  font-weight: 600;
-  color: #7fdca0;
-  min-width: 170px;
+.hud-linebar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
-.hud-money.negative { color: #ff6b78; }
+.hud-linestatus { color: var(--accent); }
 
-.budget-rate {
+/* --- Controls ------------------------------------------------------------- */
+
+button {
+  background: var(--panel-raised);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 4px 9px;
+  font: inherit;
+  cursor: pointer;
+}
+button:hover { background: #2c4152; }
+button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #06222e;
+  font-weight: 700;
+}
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+button.small { padding: 1px 7px; font-size: 12px; }
+
+/* A zoning button carries the colour it paints, as its own left-hand chip. */
+.zone-button {
+  position: relative;
+  padding-left: 20px;
+}
+.zone-button::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  margin-top: -4.5px;
+  border-radius: 2px;
+  background: var(--swatch, transparent);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+
+/* --- Floating windows ----------------------------------------------------- */
+
+.win {
+  position: absolute;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100% - 90px);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(6px);
+  overflow: hidden;
+}
+
+.win-bar {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 1px 0;
+  padding: 6px 8px;
+  background: linear-gradient(180deg, #24384a 0%, #1b2b38 100%);
+  border-bottom: 1px solid var(--border);
+  cursor: move;
+  user-select: none;
 }
-.budget-rate .stat-key { flex: 1; }
-.budget-rate .stat-value { min-width: 38px; text-align: right; }
 
-.budget-actions { display: flex; gap: 6px; margin-top: 4px; }
+.win-title { flex: 1; font-weight: 700; font-size: 13px; }
 
-button.small { padding: 1px 7px; font-size: 12px; }
+.win-icon {
+  width: 22px;
+  height: 20px;
+  padding: 0;
+  line-height: 1;
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+.win-icon:hover { background: rgba(255, 255, 255, 0.1); color: var(--text); }
 
-.stat-value.warn { color: #ff6b78; }
+.win-body {
+  padding: 10px 12px 12px;
+  overflow-y: auto;
+}
 
-/* The toolbar is two rows of buttons now, so it needs to wrap tidily. */
-#hud { row-gap: 6px; }
+/* --- Panel contents ------------------------------------------------------- */
+
+.win-body h3 {
+  margin: 12px 0 5px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  font-weight: 700;
+}
+.win-body section:first-child h3,
+.win-body > h3:first-child { margin-top: 0; }
 
 .stat-row,
 .stat-bar {
@@ -158,24 +304,17 @@ button.small { padding: 1px 7px; font-size: 12px; }
   min-width: 74px;
 }
 
-.stat-row .stat-value {
-  margin-left: auto;
-  text-align: right;
-}
-
-.stat-bar .stat-value {
-  min-width: 34px;
-  text-align: right;
-}
+.stat-row .stat-value { margin-left: auto; text-align: right; }
+.stat-bar .stat-value { min-width: 34px; text-align: right; }
+.stat-value.warn { color: var(--bad); font-weight: 600; }
 
 .stat-track {
   flex: 1;
   height: 7px;
-  background: #232a34;
+  background: rgba(255, 255, 255, 0.09);
   border-radius: 3px;
   overflow: hidden;
 }
-
 .stat-track div {
   height: 100%;
   border-radius: 3px;
@@ -186,20 +325,20 @@ button.small { padding: 1px 7px; font-size: 12px; }
   border-left: 3px solid var(--line-color, var(--accent));
   padding-left: 6px;
 }
+.line-row .stat-value { font-size: 12px; }
 
-.line-row .stat-value {
-  font-size: 12px;
-}
+.stat-note { margin: 6px 0 2px; color: var(--muted); }
 
-.stat-note {
-  margin: 2px 0;
-  color: var(--muted);
+.budget-rate {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 0;
 }
+.budget-rate .stat-key { flex: 1; }
+.budget-rate .stat-value { min-width: 38px; text-align: right; }
 
-button:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
+.budget-actions { display: flex; gap: 6px; margin-top: 4px; }
 
 .follow {
   display: flex;
@@ -224,7 +363,7 @@ dd { margin: 0; font-variant-numeric: tabular-nums; }
 .speed-bar {
   margin-top: 10px;
   height: 6px;
-  background: #232a34;
+  background: rgba(255, 255, 255, 0.09);
   border-radius: 3px;
   overflow: hidden;
 }
@@ -233,3 +372,64 @@ dd { margin: 0; font-variant-numeric: tabular-nums; }
   background: var(--accent);
   transition: width 0.1s linear;
 }
+
+/* --- Power ---------------------------------------------------------------- */
+
+.power-gauge { margin: 8px 0 4px; }
+
+.power-track {
+  height: 12px;
+  background: rgba(255, 255, 255, 0.09);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.power-track div { height: 100%; transition: width 0.3s linear; }
+
+.power-gauge-label {
+  margin-top: 3px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Warnings ------------------------------------------------------------- */
+
+.warning-list { display: flex; flex-direction: column; gap: 8px; }
+
+.warning {
+  padding: 7px 9px;
+  border-radius: 6px;
+  border-left: 4px solid var(--muted);
+  background: rgba(255, 255, 255, 0.05);
+}
+.warning-critical { border-left-color: var(--bad); }
+.warning-warning { border-left-color: var(--warn); }
+.warning-info { border-left-color: var(--accent); }
+
+.warning-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.warning-icon { font-size: 15px; }
+.warning-title { flex: 1; font-weight: 600; }
+.warning-advice { margin: 4px 0 0; color: var(--muted); }
+
+/* --- The land value breakdown in the inspector ---------------------------- */
+
+.factor-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-variant-numeric: tabular-nums;
+}
+.factor-row .stat-key { min-width: 62px; }
+.factor-bar {
+  flex: 1;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 3px;
+  overflow: hidden;
+  display: flex;
+}
+.factor-bar div { height: 100%; }
+.factor-row .stat-value { min-width: 40px; text-align: right; }
