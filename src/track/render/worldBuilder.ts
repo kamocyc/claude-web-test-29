@@ -339,6 +339,15 @@ export class WorldBuilder {
   /** 直近の rebuild で割り付けた区画。 */
   zoneCells: ZoneCell[] = [];
   lots: Lot[] = [];
+  /**
+   * 建物を建てる敷地の番号。null なら**全部**の敷地に建てる。
+   *
+   * 移植元では、用途を塗ればそこに建物が建った (エディタなので、塗った形を
+   * すぐ見せるのが正しい)。街では建物は需要で建つので、塗ってあっても
+   * まだ建っていない敷地がある。ここに「建った敷地」を入れておくと、
+   * 描画は街が実際に建てたものだけになる。
+   */
+  builtLots: Set<number> | null = null;
   /** 選択色で塗る車両の番号 (乗る車両を選んでいるとき)。 */
   highlightVehicle: number | null = null;
 
@@ -442,6 +451,27 @@ export class WorldBuilder {
   }
 
   /** 区画のマス目の表示を切り替える。 */
+  /**
+   * 建物のメッシュだけを作り直す。
+   *
+   * 街が 1 棟建てるたびに世界全体を組み立て直すのは重すぎる (交差点も
+   * 構造物も整地もやり直すことになる)。建物は敷地と地形からだけ決まるので、
+   * ここだけを差し替えれば済む。
+   */
+  refreshBuildings(): void {
+    const buildings = new MeshBuilder();
+    const groundAt = (x: number, z: number): number => this.field.heightAt(x, z);
+    this.lots.forEach((lot, i) => {
+      if (!this.showsBuildingOn(i)) return;
+      buildBuilding(buildings, lot, groundAt);
+    });
+    this.replaceGeometry(this.buildingMesh, buildings);
+  }
+
+  private showsBuildingOn(index: number): boolean {
+    return this.builtLots === null || this.builtLots.has(index);
+  }
+
   setZoneView(active: boolean): void {
     this.showZones = active;
     // 地下を見ている間は地上の表示を伏せる (地下ビューを抜けたら戻す)。
@@ -777,9 +807,12 @@ export class WorldBuilder {
     this.lots = zoning.lots;
     const groundAt = (x: number, z: number): number => this.field.heightAt(x, z);
     buildZoneGrid(zoneGrid, this.zoneCells, groundAt);
-    for (const lot of this.lots) buildBuilding(buildings, lot, groundAt);
+    this.lots.forEach((lot, i) => {
+      if (!this.showsBuildingOn(i)) return;
+      buildBuilding(buildings, lot, groundAt);
+    });
     stats.zoneCells = this.zoneCells.length;
-    stats.buildings = this.lots.length;
+    stats.buildings = this.builtLots ? this.builtLots.size : this.lots.length;
 
     const power = this.buildPower(structure, structures, ranges);
     const powerNetworks = countPowerNetworks(power.poles, power.spans);

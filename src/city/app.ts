@@ -6,6 +6,7 @@ import { NETWORK_CLASSES } from '../track/network/classes';
 import { ZONE_LABELS, ZONE_TYPES, type ZoneType } from '../track/network/zoning';
 import { PlanView } from './plan';
 import { seedStartingTown } from './scenario';
+import { CitySimulation } from './simulation';
 import { CityWorld } from './world';
 
 /**
@@ -32,6 +33,7 @@ export interface CityAppOptions {
 
 export class CityApp {
   readonly world: CityWorld;
+  readonly sim: CitySimulation;
   readonly viewport: Viewport;
   readonly plan: PlanView;
   readonly tool: BuildTool;
@@ -56,6 +58,7 @@ export class CityApp {
 
   constructor(private readonly options: CityAppOptions) {
     this.world = new CityWorld(options.seed);
+    this.sim = new CitySimulation(this.world);
     this.viewport = new Viewport(options.canvas3d);
     this.ctx2d = options.canvas2d.getContext('2d')!;
     this.plan = new PlanView(this.ctx2d);
@@ -170,11 +173,14 @@ export class CityApp {
     }
 
     this.tool.update(this.cursor, this.modifiers);
-    // The engine animates on its own clock: signals, crossing gates and the
-    // traffic all read the same time, so a car never sits at a light the
+    // The city drives the traffic (its citizens are the cars), so the engine
+    // animates *without* stepping the traffic again -- it only moves the
+    // signals, the gates and the meshes to where the simulation has put
+    // things. Both read the same clock, so a car never sits at a light the
     // renderer is drawing green.
-    this.clock += dt;
-    this.world.builder.animate(this.clock, dt);
+    this.sim.step(dt);
+    this.clock = this.world.traffic.time;
+    this.world.builder.animate(this.clock, 0);
 
     if (now > this.focusUntil) this.focus = null;
     this.focusView.update(

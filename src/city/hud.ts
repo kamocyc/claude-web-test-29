@@ -4,6 +4,8 @@ import { NETWORK_CLASSES } from '../track/network/classes';
 import type { WorldStats } from '../track/render/worldBuilder';
 import { formatMoney } from '../ui/money';
 import type { ViewMode } from './app';
+import { SPEEDS, type CityStats } from './simulation';
+import type { Treasury } from './economy';
 
 /**
  * The chrome: the city's vital signs on top, what you can build along the
@@ -18,6 +20,7 @@ import type { ViewMode } from './app';
  */
 
 export interface HudCallbacks {
+  onSpeed(index: number): void;
   onMode(mode: ToolMode): void;
   onClass(classId: string): void;
   onZone(zone: ZoneType): void;
@@ -47,6 +50,9 @@ export class Hud {
   private readonly classButtons = new Map<string, HTMLButtonElement>();
   private readonly zoneButtons = new Map<ZoneType, HTMLButtonElement>();
   private readonly viewButtons = new Map<ViewMode, HTMLButtonElement>();
+  private readonly speedButtons: HTMLButtonElement[] = [];
+  private readonly clockEl: HTMLElement;
+  private readonly moneyEl: HTMLElement;
   private hovered = '';
 
   constructor(top: HTMLElement, bottom: HTMLElement, private readonly cb: HudCallbacks) {
@@ -60,8 +66,22 @@ export class Hud {
     warningButton.appendChild(this.warningEl);
     warningButton.addEventListener('click', () => this.cb.onPanel('warnings'));
 
-    this.statusEl = el('div', 'hud-clock');
-    top.append(this.statusEl, this.statsEl, warningButton);
+    this.statusEl = el('div', 'hud-tool-status');
+    this.clockEl = el('div', 'hud-clock');
+    this.moneyEl = el('div', 'hud-money');
+
+    const speeds = el('div', 'hud-group hud-speeds');
+    SPEEDS.forEach((multiplier, i) => {
+      const b = document.createElement('button');
+      b.className = 'speed-button';
+      b.textContent = multiplier === 0 ? '‖' : `×${multiplier}`;
+      b.title = multiplier === 0 ? '一時停止' : `速度 ×${multiplier}`;
+      b.addEventListener('click', () => this.cb.onSpeed(i));
+      speeds.appendChild(b);
+      this.speedButtons.push(b);
+    });
+
+    top.append(this.clockEl, this.moneyEl, this.statusEl, this.statsEl, warningButton, speeds);
 
     this.captionEl = el('div', 'toolbar-caption');
     const row = el('div', 'toolbar-row');
@@ -134,8 +154,22 @@ export class Hud {
     }, { passive: false });
   }
 
-  /** Refresh from the tool and the world. Called once a frame. */
-  update(status: ToolStatus, stats: WorldStats | null, view: ViewMode, warning: string): void {
+  /** Refresh from the tool, the world and the city. Called once a frame. */
+  update(
+    status: ToolStatus,
+    stats: WorldStats | null,
+    city: CityStats,
+    treasury: Treasury,
+    clock: string,
+    speed: number,
+    view: ViewMode,
+    warning: string,
+  ): void {
+    this.clockEl.textContent = clock;
+    this.moneyEl.textContent = `${formatMoney(treasury.balance)}　(${
+      treasury.lastDay.net >= 0 ? '+' : ''}${formatMoney(treasury.lastDay.net)}/日)`;
+    this.moneyEl.classList.toggle('negative', treasury.inOverdraft);
+    this.speedButtons.forEach((b, i) => b.classList.toggle('active', i === speed));
     for (const [mode, b] of this.modeButtons) b.classList.toggle('active', mode === status.mode);
     for (const [id, b] of this.classButtons) b.classList.toggle('active', id === status.classId);
     for (const [zone, b] of this.zoneButtons) b.classList.toggle('active', zone === status.zone);
@@ -159,11 +193,15 @@ export class Hud {
     this.statsEl.innerHTML = '';
     if (stats) {
       for (const [label, value] of [
+        ['人口', `${city.population}`],
+        ['雇用', `${city.employed}/${city.jobs}`],
+        ['幸福度', `${Math.round(city.happiness)}`],
+        ['移動中', `${city.travelling}${city.stranded > 0 ? ` ⚠${city.stranded}` : ''}`],
+        ['平均通勤', city.meanCommute > 0 ? `${Math.round(city.meanCommute)} 分` : '—'],
         ['道路・線路', `${(stats.totalLength / 1000).toFixed(2)} km`],
-        ['交差点', `${stats.intersections}`],
-        ['駅', `${stats.stations}`],
-        ['建物', `${stats.buildings}`],
-        ['路線', `${stats.lines}`],
+        // The city's own count, not the engine's: the engine counts plots a
+        // building *could* stand on, and the city has only built some of them.
+        ['建物', `${city.buildings}`],
       ] as const) {
         const chip = el('div', 'chip');
         const name = el('span', 'chip-label');

@@ -40,6 +40,9 @@ windows.warnings.setHelp(
 buildHelp(windows.help.body);
 
 const hud = new Hud(topbar, toolbar, {
+  onSpeed: (index) => {
+    app.sim.speed = index;
+  },
   onMode: (mode) => setMode(mode),
   onClass: (id) => app.setClass(id),
   onZone: (zone) => {
@@ -51,6 +54,14 @@ const hud = new Hud(topbar, toolbar, {
   onPanel: (panel) => windows[panel].toggle(),
   onStationRotate: (steps) => app.tool.rotateStation(steps),
 });
+
+/** A short message over the toolbar, for a refusal the player needs to see. */
+let notice = '';
+let noticeUntil = 0;
+function say(message: string): void {
+  notice = message;
+  noticeUntil = performance.now() + 4000;
+}
 
 function setMode(mode: ToolMode): void {
   app.setMode(mode);
@@ -86,6 +97,14 @@ for (const canvas of [canvas3d, canvas2d]) {
     }
     updateCursor(e);
     app.tool.update(app.cursor, app.modifiers);
+    // The second click of a run is the one that spends the money, and the
+    // status bar has already quoted the price -- so the refusal happens
+    // where the player is looking.
+    const status = app.tool.status();
+    if (status.mode === 'build' && status.drawing && !app.sim.treasury.canAfford(status.cost)) {
+      say('資金が足りません');
+      return;
+    }
     app.tool.click();
   });
 }
@@ -155,6 +174,16 @@ window.addEventListener('keydown', (e) => {
   }
   if (key === 'n' || key === 'm') {
     app.tool.rotateStation(key === 'n' ? 1 : -1);
+    return;
+  }
+  // 1-5 set the speed, as they did in the tile city.
+  if (key >= '1' && key <= '5') {
+    app.sim.speed = Number(key) - 1;
+    return;
+  }
+  if (key === ' ') {
+    e.preventDefault();
+    app.sim.speed = app.sim.speed === 0 ? 2 : 0;
     return;
   }
   if (e.key === 'PageUp' || e.key === 'PageDown') {
@@ -298,7 +327,17 @@ function frame(now: number): void {
   app.frame(now);
   const status = app.tool.status();
   const worst = app.world.result?.warnings.find((w) => w.severity === 'error');
-  hud.update(status, app.world.result?.stats ?? null, app.view, worst?.message ?? '');
+  hud.update(
+    status,
+    app.world.result?.stats ?? null,
+    app.sim.stats,
+    app.sim.treasury,
+    app.sim.format(),
+    app.sim.speed,
+    app.view,
+    notice || worst?.message || '',
+  );
+  if (now > noticeUntil) notice = '';
   refreshPanels(now);
   requestAnimationFrame(frame);
 }

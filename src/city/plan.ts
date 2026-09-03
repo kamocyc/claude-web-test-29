@@ -200,7 +200,9 @@ export class PlanView {
   /** Buildings, as the footprint the 3D view puts a building on. */
   private drawBuildings(world: CityWorld): void {
     const { ctx } = this;
-    for (const lot of world.lots) {
+    const built = world.builder.builtLots;
+    for (const [index, lot] of world.lots.entries()) {
+      if (built && !built.has(index)) continue;
       const [r, g, b] = ZONE_COLORS[lot.zone];
       ctx.fillStyle = `rgb(${Math.round(r * 220)}, ${Math.round(g * 220)}, ${Math.round(b * 220)})`;
       this.fillRotatedRect(lot.center, lot.along, lot.outward, lot.halfFrontage, lot.depth / 2);

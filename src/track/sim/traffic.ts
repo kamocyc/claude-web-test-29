@@ -62,6 +62,20 @@ export interface Vehicle {
   line?: { id: LineId; plan: LinePlan; run: number; cursor: number };
   /** 動けないまま止まっている時間 [s]。駅の停車・折り返しは数えない。 */
   stuckFor?: number;
+  /**
+   * 行き先のある車両。
+   *
+   * 移植元の車は「街を走っている車」で、行き先を持たない -- 経路が尽きたら
+   * その場で適当に足す。この街の車は**誰かの用事**なので、経路は市民が
+   * 決め、着いたら消える。この 1 つのフィールドがその違いを表していて、
+   * これが付いている車両は経路を伸ばされず、終点で降ろされる。
+   */
+  trip?: {
+    /** 着いたら呼ばれる。市民はここで「着いた」ことにする。 */
+    onArrive: (vehicle: Vehicle) => void;
+    /** 着いたか。1 フレームのうちに二度呼ばないための印。 */
+    arrived?: boolean;
+  };
 }
 
 export const STATION_DWELL = 5;
@@ -96,6 +110,15 @@ const SPAWN_CLEARANCE = 15;
 const CREEP_SPEED = 0.45;
 /** 止まる位置に着いたとみなす距離 [m]。 */
 const STOP_REACH = 0.75;
+
+/**
+ * 行き先に着いたとみなす、経路の残り [m]。
+ *
+ * 止まりきる距離より甘くしてある。目的地は建物の前であって停止線ではないし、
+ * 前が詰まって最後の数 m が進めないだけの車を「まだ着いていない」ことに
+ * すると、市民が一日じゅう路上で待つことになる。
+ */
+const ARRIVAL_REACH = 4;
 
 /**
  * 行き当たりばったりの列車を降ろすまでの、動けない時間 [s]。
@@ -206,6 +229,49 @@ export class Traffic {
     );
   }
 
+  /**
+   * 行き先のある車両を出す。
+   *
+   * 経路は呼び出し側が決めた車線の並びで、`startS` はその 1 本目の起点から
+   * 測った先頭位置。出せなかった (経路が短すぎる・出口が塞がっている)
+   * ときは null を返すので、市民は歩くなり待つなりを選べる。
+   */
+  addTrip(
+    route: readonly number[],
+    startS: number,
+    onArrive: (vehicle: Vehicle) => void,
+    options: { kind?: VehicleKind; size?: BodySize; cars?: number; color?: RGB } = {},
+  ): Vehicle | null {
+    if (route.length === 0) return null;
+    const first = this.graph.lanes[route[0]];
+    if (!first) return null;
+
+    const kind = options.kind ?? 'car';
+    const size = options.size ?? CAR_SIZE;
+    const cars = options.cars ?? 1;
+    const length = cars * size.length + (cars - 1) * COUPLING;
+    const head = Math.max(length + 0.5, Math.min(startS, first.path.length - 0.5));
+    // Somebody already sitting where this car would appear: try again later
+    // rather than materialise inside them.
+    if (!this.isClear(route[0], Math.max(0, head - length - 1), length + 1)) return null;
+
+    const vehicle: Vehicle = {
+      id: this.nextId++,
+      kind,
+      route: [...route],
+      head,
+      speed: 0,
+      size,
+      cars,
+      color: options.color ?? CAR_COLORS[this.nextId % CAR_COLORS.length],
+      bodies: [],
+      trip: { onArrive },
+    };
+    this.updateBodies(vehicle);
+    this.vehicles.push(vehicle);
+    return vehicle;
+  }
+
   /** その車両がいま乗っている車線。 */
   laneOf(vehicle: Vehicle): number {
     return vehicle.route[this.locate(vehicle.route, vehicle.head).index];
@@ -260,6 +326,15 @@ export class Traffic {
     const space: JunctionSpace = { occupied, tailIn };
     for (const vehicle of this.vehicles) {
       this.advance(vehicle, step, space);
+    }
+    // 着いた車両を降ろす。呼び出しは削除の前に済ませるので、市民は
+    // 「着いた」ことを知ったうえで次の行動を決められる。
+    for (const vehicle of this.vehicles) {
+      const trip = vehicle.trip;
+      if (!trip || trip.arrived) continue;
+      if (this.remaining(vehicle) > ARRIVAL_REACH) continue;
+      trip.arrived = true;
+      trip.onArrive(vehicle);
     }
     this.vehicles.splice(
       0,
@@ -501,6 +576,8 @@ export class Traffic {
   }
 
   private alive(vehicle: Vehicle): boolean {
+    // 用事の済んだ車両は消える。行き止まりで転回もしない。
+    if (vehicle.trip) return !vehicle.trip.arrived;
     // 対向と鉢合わせて動けなくなった列車は降ろす。別の場所に湧き直す。
     if (vehicle.kind === 'train' && !vehicle.line && (vehicle.stuckFor ?? 0) > STUCK_LIMIT) {
       return false;
@@ -516,6 +593,8 @@ export class Traffic {
   }
 
   private extendRoute(vehicle: Vehicle): void {
+    // 行き先のある車両の経路は市民が決めたもの。足すと別の所へ行ってしまう。
+    if (vehicle.trip) return;
     if (vehicle.line) {
       this.extendLineRoute(vehicle);
       return;
@@ -689,11 +768,13 @@ export class Traffic {
     for (const kind of ['car', 'train'] as const) {
       const want = this.targetCount(kind);
       // 路線の列車は計画で決まった数だけ走るので、こちらでは数えない。
-      const have = this.vehicles.filter((v) => v.kind === kind && !v.line).length;
+      // 用事のある車両はここでは数えない。数えると、街の車を減らそうとして
+      // 市民の車を消してしまう。
+      const have = this.vehicles.filter((v) => v.kind === kind && !v.line && !v.trip).length;
       // 1 フレームに 1 台ずつ。まとめて湧かせると団子になる。
       if (have < want) this.spawn(kind);
       else if (have > want + 1) {
-        const index = this.vehicles.findIndex((v) => v.kind === kind && !v.line);
+        const index = this.vehicles.findIndex((v) => v.kind === kind && !v.line && !v.trip);
         if (index >= 0) this.vehicles.splice(index, 1);
       }
     }
