@@ -7,13 +7,7 @@ import {
 } from '../config';
 import { idx } from '../core/grid';
 import { BuildingType, CitizenState, Zone } from '../core/types';
-import {
-  chooseVenue,
-  drainLeisure,
-  endLeisureDay,
-  leisureReport,
-  visit,
-} from '../sim/leisure';
+import { chooseVenue, drainLeisure, endLeisureDay, visit } from '../sim/leisure';
 import { inDepartureWindow, isRestDay, leisureMinute, restDay } from '../sim/schedule';
 import { Simulation } from '../sim/simulation';
 import { leisureCapacity } from '../world/buildings';
@@ -93,7 +87,7 @@ describe('parks and leisure', () => {
       expect(c.state).not.toBe(CitizenState.ToLeisure);
     }
     expect(sim.happiness.breakdown.leisure).toBeLessThan(60);
-    expect(leisureReport(world).visitsToday).toBe(0);
+    expect(sim.services.report.leisureVisits).toBe(0);
   });
 
   it('does not send anybody to a venue that is not running yet', () => {

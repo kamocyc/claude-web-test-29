@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { idx } from '../core/grid';
-import { Zone, type BuildingId } from '../core/types';
+import { CitizenState, Zone, type BuildingId } from '../core/types';
+import type { Citizen } from '../sim/citizen';
+import type { TransitLine } from '../world/transit';
 import { BUS_ID_BASE } from '../sim/bus';
 import { Simulation } from '../sim/simulation';
 import { createBusLine, createLineThrough, reshapeLineThrough } from '../world/lineBuilder';
@@ -185,6 +187,104 @@ describe('editing a line that is already running', () => {
     expect(world.withdrawLine(line.id)).toBe(false);
   });
 
+  it('never leaves a rider aboard a vehicle that has stopped running', () => {
+    const { world, stops } = servedTown();
+    const line = createBusLine(world, stops)!;
+    const sim = new Simulation(world);
+    run(sim, 600);
+
+    // Put somebody aboard every bus by hand rather than waiting for the city
+    // to produce riders: what is being tested is what happens to a passenger
+    // when the vehicle under them is withdrawn, and that should not depend on
+    // whether this fixture happens to make the bus worth catching. Every bus,
+    // because the service drops its emptiest one -- with a single rider it
+    // would quietly retire somebody else's empty bus and prove nothing.
+    const riders = line.vehicles.map((vid, i) =>
+      board(world, line, world.citizens[i], stops[0], stops[3], vid));
+    expect(riders.length).toBeGreaterThan(1);
+    for (const c of riders) expect(c.state).toBe(CitizenState.Riding);
+
+    // Cutting the service takes their bus out from under them. The line
+    // itself survives, so the "your line was withdrawn" rescue does not fire
+    // -- and a rider nobody rescues is frozen aboard a vehicle that no longer
+    // carries them, for good.
+    world.removeVehicle(line.id);
+    run(sim, 400);
+
+    // Exactly one of them lost their bus, and that one is not still riding it.
+    expect(riders.filter((c) => c.state === CitizenState.Riding).length)
+      .toBe(riders.length - 1);
+    for (const c of world.citizens) {
+      if (c.state !== CitizenState.Riding) continue;
+      const vehicle = world.vehicleOn(line, c.boardedVehicle);
+      expect(vehicle).toBeDefined();
+      expect(vehicle!.passengers).toContain(c.id);
+    }
+  });
+
+  it('lets go of every rider and waiting passenger when a line is re-routed', () => {
+    const { world, stops } = servedTown();
+    const line = createBusLine(world, [stops[0], stops[1], stops[3]])!;
+    const sim = new Simulation(world);
+    run(sim, 600);
+
+    const rider = board(world, line, world.citizens[0], stops[0], stops[3]);
+    const waiting = world.citizens[1];
+    waiting.state = CitizenState.Waiting;
+    waiting.legState = CitizenState.ToWork;
+    waiting.ride = {
+      line: line.id,
+      boardStation: stops[1],
+      alightStation: stops[3],
+      boardStop: 1,
+      alightStop: 2,
+    };
+
+    // stops[1] is about to stop being on the line, and every stop index the
+    // two of them are holding is about to be renumbered.
+    reshapeLineThrough(world, line.id, [stops[0], stops[2], stops[3]]);
+    run(sim, 600);
+
+    expect(rider.state).not.toBe(CitizenState.Riding);
+    expect(waiting.ride?.boardStation).not.toBe(stops[1]);
+    for (const c of [rider, waiting]) {
+      // Whatever they are doing now, it is not holding a plan for a shape the
+      // line no longer has.
+      if (c.ride) expect(line.stations).toContain(c.ride.boardStation);
+    }
+  });
+
+  it('sends a new train to the next stop it reaches, not back to the terminus', () => {
+    const { world, stations } = servedTown();
+    const { line } = createLineThrough(world, stations);
+    expect(line).not.toBeNull();
+    const sim = new Simulation(world);
+    run(sim, 400);
+
+    // Bunch the trains at the start, so the widest gap -- and therefore the
+    // new train -- lands in the middle of the route rather than in the wrap
+    // back to the terminus, where "head for stop 0" happens to be right.
+    for (const vid of line!.vehicles) world.trains[vid].s = 1;
+    world.addVehicle(line!.id);
+    const fresh = world.trains[line!.vehicles[line!.vehicles.length - 1]];
+    expect(fresh.s).toBeGreaterThan(line!.stopAt[1]);
+
+    // A train put down in the middle of the route used to be told it was
+    // heading for stop 0 -- the far end of a round trip -- so it drove most of
+    // a lap past every platform on the way without opening its doors. However
+    // far it has to go, it can never be further than the widest gap between
+    // two consecutive stops.
+    const lap = line!.route.length - 1;
+    const ahead = (from: number, to: number): number =>
+      (to >= from ? to - from : lap - from + to);
+    const toNext = ahead(fresh.s, line!.stopAt[fresh.nextStop]);
+    // The stop it is heading for is the first one it comes to: no other stop
+    // lies between the train and its target.
+    for (const at of line!.stopAt) {
+      expect(ahead(fresh.s, at)).toBeGreaterThanOrEqual(toNext - 1e-9);
+    }
+  });
+
   it('keeps an edited service across a save', () => {
     const { world, stops } = servedTown();
     const line = createBusLine(world, [stops[0], stops[3]])!;
@@ -231,3 +331,27 @@ describe('editing a line that is already running', () => {
     expect(world.trains.length).toBeLessThanOrEqual(trains);
   });
 });
+
+/** Put a citizen aboard a vehicle working a line, as boarding would. */
+function board(
+  world: World,
+  line: TransitLine,
+  c: Citizen,
+  from: BuildingId,
+  to: BuildingId,
+  vid = line.vehicles[0],
+): Citizen {
+  const vehicle = world.vehicleOn(line, vid)!;
+  c.state = CitizenState.Riding;
+  c.legState = CitizenState.ToWork;
+  c.ride = {
+    line: line.id,
+    boardStation: from,
+    alightStation: to,
+    boardStop: 0,
+    alightStop: line.stations.length - 1,
+  };
+  c.boardedVehicle = vehicle.id;
+  vehicle.passengers.push(c.id);
+  return c;
+}

@@ -74,6 +74,16 @@ export class Statistics {
 
   /** How many citizens are standing on each station's platform. */
   readonly waitingByStation = new Map<BuildingId, number>();
+  /**
+   * ...and how many of them are waiting for each *line*.
+   *
+   * Two lines calling at one station share its platform, so the per-station
+   * figure answers "how busy is this stop" and cannot answer "how many people
+   * is this service keeping waiting". A rider already knows which line they
+   * are waiting for, so the exact number is a second tally in the same pass
+   * rather than an estimate.
+   */
+  readonly waitingByLine = new Map<number, number>();
 
   /** Completed trips ever, for the "since day 1" counter. */
   totalCompleted = 0;
@@ -85,6 +95,7 @@ export class Statistics {
   sample(world: World): void {
     const s = { ...EMPTY_LIVE };
     this.waitingByStation.clear();
+    this.waitingByLine.clear();
 
     for (const c of world.citizens) {
       s.population++;
@@ -105,6 +116,8 @@ export class Statistics {
           if (c.ride) {
             const at = c.ride.boardStation;
             this.waitingByStation.set(at, (this.waitingByStation.get(at) ?? 0) + 1);
+            const line = c.ride.line;
+            this.waitingByLine.set(line, (this.waitingByLine.get(line) ?? 0) + 1);
           }
           break;
         case CitizenState.Riding:
@@ -133,6 +146,11 @@ export class Statistics {
 
   waitingAt(station: BuildingId): number {
     return this.waitingByStation.get(station) ?? 0;
+  }
+
+  /** People standing at a stop waiting for this particular service. */
+  waitingFor(line: number): number {
+    return this.waitingByLine.get(line) ?? 0;
   }
 
   /** Record a finished door-to-door trip. */

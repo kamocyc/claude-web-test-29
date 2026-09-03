@@ -6,7 +6,7 @@ import {
 } from '../config';
 import { neighbors } from '../core/grid';
 import { BuildingType, type TileIndex } from '../core/types';
-import { isHome, isServing, type Building } from '../world/buildings';
+import { isHome, isLeisure, isServing, type Building } from '../world/buildings';
 import type { World } from '../world/world';
 
 /** The services whose coverage is a question of "can it reach you by road?". */
@@ -41,6 +41,13 @@ export interface ServicesReport {
   fireStations: number;
   policeStations: number;
   hospitals: number;
+  /** Leisure: pocket parks, and the two big venues. */
+  parks: number;
+  venues: number;
+  /** Visitors the venues have taken today, across the city. */
+  leisureVisits: number;
+  /** Households whose last outing found the place full. */
+  turnedAway: number;
   /** Homes within reach of each service, and how many there are in total. */
   homes: number;
   schooled: number;
@@ -141,6 +148,9 @@ export class Services {
     let fireStations = 0;
     let policeStations = 0;
     let hospitals = 0;
+    let parks = 0;
+    let venues = 0;
+    let leisureVisits = 0;
     let homes = 0;
     let schooled = 0;
     let fireCovered = 0;
@@ -152,6 +162,11 @@ export class Services {
       else if (b.type === BuildingType.FireStation) fireStations++;
       else if (b.type === BuildingType.PoliceStation) policeStations++;
       else if (b.type === BuildingType.Hospital) hospitals++;
+      else if (isLeisure(b.type)) {
+        leisureVisits += b.visitsToday;
+        if (b.type === BuildingType.Park) parks++;
+        else venues++;
+      }
       if (!isHome(b.type)) continue;
       homes++;
       if (this.serves(Service.School, b)) schooled++;
@@ -161,9 +176,11 @@ export class Services {
 
     let education = 0;
     let health = 0;
+    let turnedAway = 0;
     for (const c of world.citizens) {
       education += c.education;
       health += c.health;
+      if (c.lastOutingFailed) turnedAway++;
     }
     const people = Math.max(1, world.citizens.length);
 
@@ -172,6 +189,10 @@ export class Services {
       fireStations,
       policeStations,
       hospitals,
+      parks,
+      venues,
+      leisureVisits,
+      turnedAway,
       homes,
       schooled,
       fireCovered,
@@ -188,6 +209,10 @@ function emptyReport(): ServicesReport {
     fireStations: 0,
     policeStations: 0,
     hospitals: 0,
+    parks: 0,
+    venues: 0,
+    leisureVisits: 0,
+    turnedAway: 0,
     homes: 0,
     schooled: 0,
     fireCovered: 0,

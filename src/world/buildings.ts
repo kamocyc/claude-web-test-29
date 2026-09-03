@@ -137,8 +137,8 @@ const SPECS: Record<BuildingType, BuildingSpec> = {
     capacity: 0, industry: Industry.None, power: 1, noise: 1,
     rawPerHour: 0, outputPerHour: 0, storage: 0, upkeep: 60, wagePerJob: 0,
   },
-  // The three civic services are workplaces the city pays for rather than
-  // taxes: their industry is None, so they are never charged commercial or
+  // The civic services are workplaces the city pays for rather than taxes:
+  // their industry is None, so they are never charged commercial or
   // industrial tax, but their staff pay income tax like anybody else. What
   // they cost the city is the upkeep, and that is deliberately the largest in
   // the table -- a fire brigade is a standing expense, not a purchase.
@@ -249,11 +249,14 @@ export function leisureDraw(type: BuildingType): number {
 }
 
 /**
- * How many visits a venue can take in a day before it is simply full.
+ * A venue's size, in visitors.
  *
- * A park is small and there are meant to be many of them; the fairground
- * takes ten times as many people and still cannot serve a whole city, which
- * is what stops one expensive building from answering the question forever.
+ * Not the daily limit on its own: that is this times
+ * `LEISURE_VISITS_PER_CAPACITY` (so 240 / 1,320 / 2,160 visits a day), because
+ * the same place takes several sittings between opening and closing. A park is
+ * small and there are meant to be many of them; the fairground takes ten times
+ * as many people and still cannot serve a whole city, which is what stops one
+ * expensive building from answering the question forever.
  */
 export function leisureCapacity(type: BuildingType): number {
   switch (type) {

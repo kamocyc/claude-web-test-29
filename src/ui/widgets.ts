@@ -76,6 +76,29 @@ export function button(label: string, onClick: () => void): HTMLButtonElement {
   return b;
 }
 
+/**
+ * True while the player is typing into a field inside this element.
+ *
+ * The panels are rebuilt from the simulation several times a second, which is
+ * right for a readout and wrong for a text field: replacing the input
+ * mid-word drops focus, and every keystroke after that reaches the toolbar's
+ * shortcut handler instead -- so typing a line's name silently switched tools
+ * and toggled overlays.
+ *
+ * Deliberately only text fields. A focused *button* must not stop the panel
+ * updating: a button keeps focus after it is clicked, so treating that as
+ * "the player is busy" freezes the panel until they click somewhere else --
+ * which is exactly what expanding a line in the lines window does.
+ */
+export function holdsFocus(body: HTMLElement): boolean {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLInputElement) && !(active instanceof HTMLTextAreaElement)) {
+    return false;
+  }
+  if (active instanceof HTMLInputElement && active.type !== 'text') return false;
+  return body.contains(active);
+}
+
 export interface Help {
   /** The "？" itself, for the heading or the row it belongs to. */
   button: HTMLButtonElement;

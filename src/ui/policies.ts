@@ -15,90 +15,103 @@ export interface PoliciesCallbacks {
   onToggle(ordinance: Ordinance): void;
 }
 
+/** The controls for one ordinance, built once and afterwards only updated. */
+interface OrdinanceRow {
+  root: HTMLElement;
+  box: HTMLInputElement;
+  cost: HTMLElement;
+}
+
 /**
  * The city's by-laws: five switches, what each one does, and what it costs.
  *
- * Deliberately shows the *estimated cost today* rather than only what was
- * billed last night. An ordinance that was switched on this morning has never
- * been billed, so a panel that only reported history would answer "—" to the
- * one question the player is asking before they flip the switch.
+ * The switches are built **once** and afterwards only have their values set,
+ * unlike every read-only panel in the game, which throws its body away and
+ * builds it again from the simulation. That pattern is right for a number and
+ * wrong for a control: a checkbox replaced between the player's mouse-down and
+ * their mouse-up is a click the browser never delivers, because it only fires
+ * one when both landed on the same element -- which is the same trap
+ * `HelpState` exists for on the "？" buttons. Only the bill below them is
+ * rebuilt, and nothing in it is clickable.
+ *
+ * The cost column deliberately shows what each ordinance *would* cost today
+ * rather than only what was billed last night: one switched on this morning
+ * has never been billed, so a panel that only reported history would answer
+ * "—" to the question the player is asking before they flip the switch.
  */
 export class PoliciesPanel {
   private readonly body: HTMLElement;
+  private readonly rows = new Map<Ordinance, OrdinanceRow>();
+  private readonly bill: HTMLElement;
   private lastDraw = 0;
-  private dirty = true;
 
   constructor(root: HTMLElement, private readonly cb: PoliciesCallbacks) {
     root.innerHTML = '';
     this.body = document.createElement('div');
     this.body.className = 'policies-body';
+
+    for (const ordinance of ALL_ORDINANCES) {
+      const built = this.buildRow(ordinance);
+      this.rows.set(ordinance, built);
+      this.body.appendChild(built.root);
+    }
+
+    this.bill = document.createElement('div');
+    this.body.appendChild(this.bill);
     root.append(this.body);
   }
 
   update(sim: Simulation, now = performance.now()): void {
-    if (!this.dirty && now - this.lastDraw < REFRESH_MS) return;
+    if (now - this.lastDraw < REFRESH_MS) return;
     this.lastDraw = now;
-    this.dirty = false;
 
     const { policies } = sim;
-    const riders = ridersYesterday(sim);
+    for (const [ordinance, el] of this.rows) {
+      const on = policies.isOn(ordinance);
+      el.root.classList.toggle('on', on);
+      el.box.checked = on;
+      // Priced on yesterday's traffic, so every row in this column is a day.
+      el.cost.textContent = `${
+        formatMoney(policies.costOf(ordinance, sim.world, sim.ridersLastDay))}/日`;
+    }
 
-    this.body.innerHTML = '';
-    this.body.append(
-      ...ALL_ORDINANCES.map((o) => this.ordinanceRow(sim, o, riders)),
-      section('前日の請求', [
-        ...ALL_ORDINANCES
-          .filter((o) => policies.isOn(o))
-          .map((o) => row(
-            `　${ORDINANCES[o].name}`,
-            formatMoney(policies.lastBill.get(o) ?? 0),
-          )),
-        row('合計', formatMoney(sim.economy.breakdown.ordinances),
-          sim.economy.breakdown.ordinances > 0),
-        policies.enabled.length === 0 ? note('施行中の条例はありません。') : note(''),
-      ]),
-    );
+    // Last night's bill is read from the bill rather than from what is
+    // switched on now: an ordinance repealed this morning was still paid for
+    // yesterday, and one passed this morning was not.
+    this.bill.innerHTML = '';
+    this.bill.appendChild(section('前日の請求', [
+      ...ALL_ORDINANCES
+        .filter((o) => policies.lastBill.has(o))
+        .map((o) => row(`　${ORDINANCES[o].name}`, formatMoney(policies.lastBill.get(o) ?? 0))),
+      row('合計', formatMoney(sim.economy.breakdown.ordinances),
+        sim.economy.breakdown.ordinances > 0),
+      ...(policies.enabled.length === 0 ? [note('施行中の条例はありません。')] : []),
+    ]));
   }
 
-  private ordinanceRow(sim: Simulation, ordinance: Ordinance, riders: number): HTMLElement {
+  private buildRow(ordinance: Ordinance): OrdinanceRow {
     const spec = ORDINANCES[ordinance];
-    const on = sim.policies.isOn(ordinance);
 
-    const wrap = document.createElement('div');
-    wrap.className = on ? 'policy on' : 'policy';
+    const root = document.createElement('div');
+    root.className = 'policy';
 
     const head = document.createElement('label');
     head.className = 'policy-head';
     const box = document.createElement('input');
     box.type = 'checkbox';
-    box.checked = on;
-    box.addEventListener('change', () => {
-      this.dirty = true;
-      this.cb.onToggle(ordinance);
-    });
+    box.addEventListener('change', () => this.cb.onToggle(ordinance));
     const name = document.createElement('span');
     name.className = 'policy-name';
     name.textContent = spec.name;
     const cost = document.createElement('span');
     cost.className = 'policy-cost';
-    cost.textContent = `${formatMoney(sim.policies.costOf(ordinance, sim.world, riders))}/日`;
     head.append(box, name, cost);
 
     const effect = document.createElement('p');
     effect.className = 'stat-note';
     effect.textContent = `${spec.effect}（費用: ${spec.billing}）`;
 
-    wrap.append(head, effect);
-    return wrap;
+    root.append(head, effect);
+    return { root, box, cost };
   }
-}
-
-/**
- * Rides carried since the books last closed -- the figure the fare subsidy is
- * billed on, read from the same counter the billing reads.
- */
-function ridersYesterday(sim: Simulation): number {
-  let total = 0;
-  for (const line of sim.world.lines) total += line.ridership;
-  return Math.max(0, total - sim.ridershipAtDayStart);
 }

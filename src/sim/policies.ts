@@ -10,7 +10,6 @@ import {
   ORDINANCE_TRANSIT_PREFERENCE,
   TRANSIT_PREFERENCE,
 } from '../config';
-import { BuildingType } from '../core/types';
 import { isLeisure } from '../world/buildings';
 import type { World } from '../world/world';
 
@@ -39,7 +38,7 @@ export const enum Ordinance {
   EnergySaving = 1,
   /** 夜間パトロール: more relief around every working police station. */
   NightPatrol = 2,
-  /** 緑化条例: parks are worth more, and pull further. */
+  /** 緑化条例: parks are worth more to the ground, and pull from further. */
   Greening = 3,
   /** 無料健診: health settles higher wherever a hospital reaches. */
   FreeClinics = 4,
@@ -71,7 +70,7 @@ export const ORDINANCES: Record<Ordinance, OrdinanceSpec> = {
   },
   [Ordinance.Greening]: {
     name: '緑化条例',
-    effect: '公園・レジャー施設の地価への効果と集客力が上がります。',
+    effect: '公園・レジャー施設の地価への効果が上がり、遠くからでも人が来るようになります。',
     billing: '公園・レジャー施設の数に比例',
   },
   [Ordinance.FreeClinics]: {
@@ -190,10 +189,17 @@ export class Policies {
   }
 }
 
+/**
+ * Every live building -- the same set `powerDraw` discounts.
+ *
+ * Parks were excluded here and not there, so the city got the saving on them
+ * without being billed for it. The two have to be one set or the panel's
+ * "per building" is not the building count it charges on.
+ */
 function countLiveBuildings(world: World): number {
   let n = 0;
   for (const b of world.buildings) {
-    if (b.alive && b.type !== BuildingType.Park) n++;
+    if (b.alive) n++;
   }
   return n;
 }

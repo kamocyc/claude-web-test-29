@@ -9,7 +9,7 @@ import {
   LEISURE_VISITS_PER_CAPACITY,
 } from '../config';
 import { manhattan } from '../core/grid';
-import { BuildingType, type BuildingId } from '../core/types';
+import type { BuildingId } from '../core/types';
 import {
   isLeisure,
   isServing,
@@ -83,15 +83,20 @@ export function chooseVenue(world: World, c: Citizen, policies?: Policies): Buil
  * At the bias distance a venue has to be twice as good to be worth the extra
  * journey, which is what keeps the local park competitive with the stadium
  * without making the stadium pointless.
+ *
+ * The greening by-law widens that distance rather than multiplying the draw.
+ * Scaling every candidate's draw by the same factor is arithmetic that cannot
+ * change an ordering, so it moved nobody: an ordinance whose whole promise is
+ * that venues "pull further" has to change how far people will go, which is
+ * this number and not the other one.
  */
 function appeal(b: Building, distance: number, policies?: Policies): number {
-  const draw = drawOf(b, policies);
-  return draw / (1 + distance / LEISURE_DISTANCE_BIAS);
+  return leisureDraw(b.type) / (1 + distance / reach(policies));
 }
 
-/** A venue's pull, with the greening by-law in it if the city has passed one. */
-export function drawOf(b: Building, policies?: Policies): number {
-  return leisureDraw(b.type) * (policies?.isOn(Ordinance.Greening) ? GREENING_DRAW : 1);
+/** How far people will travel before a venue's pull has halved. */
+export function reach(policies?: Policies): number {
+  return LEISURE_DISTANCE_BIAS * (policies?.isOn(Ordinance.Greening) ? GREENING_DRAW : 1);
 }
 
 /** True when a venue has already taken as many visitors as it can in a day. */
@@ -105,13 +110,13 @@ function isFull(b: Building): boolean {
  * arrived -- the leisure equivalent of walking to a shop and finding it bare,
  * and just as much a real outcome.
  */
-export function visit(b: Building, c: Citizen, policies?: Policies): number {
+export function visit(b: Building, c: Citizen): number {
   if (!b.alive || !isServing(b) || isFull(b)) {
     c.lastOutingFailed = true;
     return 0;
   }
   b.visitsToday++;
-  const gained = LEISURE_VISIT * Math.min(1.5, drawOf(b, policies));
+  const gained = LEISURE_VISIT * Math.min(1.5, leisureDraw(b.type));
   c.leisure = Math.min(LEISURE_VISIT * 1.5, c.leisure + gained);
   c.lastOutingFailed = false;
   return gained;
@@ -143,45 +148,4 @@ export function endLeisureDay(world: World): void {
   for (const b of world.buildings) {
     if (b.visitsToday !== 0) b.visitsToday = 0;
   }
-}
-
-export interface LeisureReport {
-  /** Venues, by kind. */
-  parks: number;
-  venues: number;
-  /** Visits taken today across the city, and how many were turned away. */
-  visitsToday: number;
-  /** Mean satisfaction over the population, 0..100. */
-  satisfaction: number;
-  /** Households whose last outing found the place full. */
-  turnedAway: number;
-}
-
-/** What the panels show: the city's leisure provision, in one pass. */
-export function leisureReport(world: World): LeisureReport {
-  let parks = 0;
-  let venues = 0;
-  let visitsToday = 0;
-  for (const b of world.buildings) {
-    if (!b.alive || !isLeisure(b.type)) continue;
-    visitsToday += b.visitsToday;
-    if (b.type === BuildingType.Park) parks++;
-    else venues++;
-  }
-
-  let satisfaction = 0;
-  let turnedAway = 0;
-  for (const c of world.citizens) {
-    satisfaction += leisureSatisfaction(c);
-    if (c.lastOutingFailed) turnedAway++;
-  }
-  return {
-    parks,
-    venues,
-    visitsToday,
-    satisfaction: world.citizens.length === 0
-      ? 0
-      : (satisfaction / world.citizens.length) * 100,
-    turnedAway,
-  };
 }

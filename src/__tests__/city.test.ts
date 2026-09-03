@@ -5,6 +5,8 @@ import { BuildingType, Zone } from '../core/types';
 import { Simulation } from '../sim/simulation';
 import { World } from '../world/world';
 import { compactCity, flatten, run } from './helpers';
+import { BUS_ID_BASE } from '../sim/bus';
+import { createBusLine } from '../world/lineBuilder';
 
 /** Two road networks that do not touch, with a plant on the left one only. */
 function splitTown(): World {
@@ -177,9 +179,40 @@ describe('happiness and migration', () => {
         expect(id).toBeLessThan(world.citizens.length);
       }
     }
-    for (const train of world.trains) {
-      for (const id of train.passengers) expect(id).toBeLessThan(world.citizens.length);
+    // Both fleets, not just the trains: a bus carries the same citizen ids
+    // through the same boarding code, so an unmapped bus list is a bus
+    // teleporting whoever inherited a departed rider's index.
+    for (const vehicle of [...world.trains, ...world.buses]) {
+      for (const id of vehicle.passengers) expect(id).toBeLessThan(world.citizens.length);
     }
+  });
+
+  it('renumbers bus passengers along with everybody else', () => {
+    const world = compactCity();
+    const sim = new Simulation(world);
+    run(sim, TICKS_PER_DAY);
+
+    // A bus route down the housing street, with somebody aboard it.
+    const stops: number[] = [];
+    for (const x of [12, 26]) {
+      const stop = world.placeBusStop(idx(x, 21));
+      if (stop) stops.push(stop.id);
+    }
+    const line = createBusLine(world, stops);
+    expect(line).not.toBeNull();
+    const bus = world.buses[line!.vehicles[0] - BUS_ID_BASE];
+    const passenger = world.citizens[6];
+    bus.passengers.push(passenger.id);
+
+    // Somebody with a lower id leaves, so every id above theirs moves down.
+    const victim = world.citizens[0];
+    victim.happiness = 0;
+    victim.unhappyHours = PATIENCE_HOURS;
+    sim.happiness.migrate(world);
+
+    // The bus is carrying the same person, at their new index.
+    expect(world.citizens[bus.passengers[0]]).toBe(passenger);
+    expect(bus.passengers[0]).toBe(passenger.id);
   });
 
   it('keeps a departing neighbour from changing anyone else\'s routine', () => {

@@ -254,16 +254,6 @@ export function scheduleJitter(seed: number, salt: number): number {
   return hashToUnit(seed, salt) * 2 - 1;
 }
 
-export function isTravelling(c: Citizen): boolean {
-  return c.state === CitizenState.ToWork || c.state === CitizenState.ToHome;
-}
-
-/** True while the citizen is moving under their own steam along `path`. */
-export function isSelfPropelled(c: Citizen): boolean {
-  return isTravelling(c) && c.path !== null;
-}
-
-
 export function tileCenterX(i: TileIndex): number {
   return (i % MAP_SIZE) + 0.5;
 }

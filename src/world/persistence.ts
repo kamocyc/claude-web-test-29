@@ -59,6 +59,8 @@ export interface SaveData {
   ordinances: number[];
   /** Rides completed as of the last close of books, for the fare subsidy. */
   ridershipAtDayStart: number;
+  /** ...and how many of them were carried on that day, for the estimate. */
+  ridersLastDay: number;
   /** Base64 of the per-tile float fields (Float32, MAP_SIZE^2 each). */
   traffic: string;
   noise: string;
@@ -241,6 +243,7 @@ export function serialize(sim: Simulation): SaveData {
     settledDay: sim.lastSettledDay,
     ordinances: sim.policies.snapshot(),
     ridershipAtDayStart: sim.ridershipAtDayStart,
+    ridersLastDay: sim.ridersLastDay,
     money: {
       balance: sim.economy.balance,
       debt: sim.economy.debt,
@@ -643,6 +646,7 @@ export function deserialize(data: SaveData): Simulation {
   // closed. Recomputing it from the lines instead would hand the city a free
   // day of fare subsidy on every load.
   sim.ridershipAtDayStart = data.ridershipAtDayStart ?? 0;
+  sim.ridersLastDay = data.ridersLastDay ?? 0;
   sim.stats.restore(data.completedTrips ?? 0);
   sim.stats.sample(world);
 

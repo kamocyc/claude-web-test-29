@@ -440,6 +440,18 @@ export const BUILD_COSTS = {
   elevatedRail: 1_500,
 } as const;
 
+/**
+ * What one vehicle costs the city per day, by mode.
+ *
+ * Rolling stock was free until the lines window put an 増便 button in front of
+ * the player, at which point "should this line run more?" had exactly one
+ * answer. A train is the most expensive thing the city can add without
+ * building anything; a bus is a fraction of it, which is the same argument
+ * the two modes make everywhere else.
+ */
+export const UPKEEP_PER_TRAIN = 400;
+export const UPKEEP_PER_BUS = 180;
+
 export const UPKEEP_PER_ROAD_TILE = 0.5;
 export const UPKEEP_PER_RAIL_TILE = 1.5;
 /** A structure held up in the air costs more to keep than one on the ground. */
@@ -561,8 +573,10 @@ export const LEISURE_OPEN_MINUTE = 8 * 60;
 export const LEISURE_CLOSE_MINUTE = 20 * 60;
 
 /**
- * How much of a venue's capacity one visitor takes, and how crowded it may
- * get before it stops being worth visiting.
+ * How many sittings a venue takes between opening and closing.
+ *
+ * Its daily limit is `leisureCapacity(type)` times this, so a venue's size and
+ * how long its day is are two numbers rather than one.
  *
  * A venue is not consumed the way a shop's stock is -- a park does not run out
  * of park -- but a fairground with the whole city inside it is not a day out

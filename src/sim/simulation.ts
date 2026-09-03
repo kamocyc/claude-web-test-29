@@ -110,6 +110,17 @@ export class Simulation {
    */
   ridershipAtDayStart = 0;
 
+  /**
+   * Rides carried on the last *whole* day.
+   *
+   * The fare subsidy is billed on this, and the panel quotes it as a daily
+   * cost -- so the figure has to be a day. Deriving it from the running
+   * counter instead ("rides since midnight") reads ¥0/day at one in the
+   * morning and climbs all afternoon, next to four rows that are genuine
+   * daily figures.
+   */
+  ridersLastDay = 0;
+
   private pathQueue: Citizen[] = [];
 
   /**
@@ -513,7 +524,7 @@ export class Simulation {
 
     if (c.state === CitizenState.AtLeisure) {
       const venue = this.world.buildings[c.destination];
-      if (venue && venue.alive) visit(venue, c, this.policies);
+      if (venue && venue.alive) visit(venue, c);
       else c.lastOutingFailed = true;
       // An afternoon out, then home -- and a long cooling-off period either
       // way, so a city with one crowded park does not put its whole
@@ -614,11 +625,8 @@ export class Simulation {
     if (this.clock.day !== this.lastSettledDay) {
       if (this.lastSettledDay >= 0) {
         const total = totalRidership(this.world);
-        this.economy.settleDay(
-          this.world,
-          this.policies,
-          Math.max(0, total - this.ridershipAtDayStart),
-        );
+        this.ridersLastDay = Math.max(0, total - this.ridershipAtDayStart);
+        this.economy.settleDay(this.world, this.policies, this.ridersLastDay);
         this.ridershipAtDayStart = total;
         this.freight.endDay();
         this.emergency.endDay();

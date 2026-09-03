@@ -261,14 +261,18 @@ function compactCitizens(world: World): void {
     if (b.occupants.length === 0) continue;
     b.occupants = b.occupants.map((id) => remap.get(id) ?? -1).filter((id) => id >= 0);
   }
-  for (const train of world.trains) {
-    if (train.passengers.length === 0) continue;
-    train.passengers = train.passengers
+  // Both fleets, not just the trains. A bus carries the same citizen ids
+  // through the same boarding code, so leaving its list unmapped meant that
+  // after anybody left the city a bus was teleporting -- and then dropping
+  // off -- whoever had inherited the departed rider's index.
+  for (const vehicle of [...world.trains, ...world.buses]) {
+    if (vehicle.passengers.length === 0) continue;
+    vehicle.passengers = vehicle.passengers
       .map((id) => remap.get(id) ?? -1)
       .filter((id) => id >= 0);
   }
   // Riders whose citizen id moved are still aboard; their `boardedVehicle` is
-  // unchanged, and the train's list above was rewritten to match.
+  // unchanged, and the vehicle lists above were rewritten to match.
   world.revision++;
 }
 

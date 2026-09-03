@@ -1,6 +1,7 @@
 import {
   CAR_FREE_SPEED,
   LEISURE_VISITS_PER_CAPACITY,
+  REST_DAYS_PER_WEEK,
   LORRY_CAPACITY,
   MAX_TERRAIN_HEIGHT,
   TRAIN_CAPACITY,
@@ -10,17 +11,18 @@ import { tileX, tileY } from '../core/grid';
 import { BuildingType, CitizenState, isTravelling, TravelMode } from '../core/types';
 import type { Citizen } from '../sim/citizen';
 import { CargoKind, LorryState, type Lorry } from '../sim/lorry';
-import { departForHomeMinute, departForWorkMinute, isRestDay, restDay } from '../sim/schedule';
+import { departForHomeMinute, departForWorkMinute, isRestDay } from '../sim/schedule';
 import type { Simulation } from '../sim/simulation';
 import {
   industryOf,
   isHome,
   isLeisure,
   leisureCapacity,
+  leisureDraw,
   specFor,
   type Building,
 } from '../world/buildings';
-import { drawOf } from '../sim/leisure';
+import { reach } from '../sim/leisure';
 import type { LandValueFactors } from '../sim/landValue';
 import { BUILDING_ISSUES, buildingIssue } from '../sim/diagnostics';
 import { Industry } from '../core/types';
@@ -167,10 +169,11 @@ export class Inspector {
       ['職場', work ? address(work.tile) : '未就業'],
       ['出勤', formatMinute(departForWorkMinute(c.seed))],
       ['退勤', formatMinute(departForHomeMinute(c.seed))],
-      // The rest day is why somebody is at home on a weekday afternoon, so
-      // the panel says which day it is rather than leaving it a mystery.
-      ['休み', `${DAY_NAMES[restDay(c.seed)]}曜${
-        isRestDay(c.seed, sim.clock.day) ? '（今日）' : ''}`],
+      // The rest day is why somebody is at home on a weekday afternoon. The
+      // clock counts days rather than naming weekdays, so this says when the
+      // next one is in the same terms -- a 曜日 nothing else in the game
+      // mentions would be a second calendar to keep in your head.
+      ['休み', restDayLabel(sim.clock.day, c.seed)],
     ];
 
     if (c.mode === TravelMode.Transit && c.ride) {
@@ -342,7 +345,8 @@ export class Inspector {
     } else if (isLeisure(b.type)) {
       const capacity = leisureCapacity(b.type) * LEISURE_VISITS_PER_CAPACITY;
       rows.push(['本日の来場', `${b.visitsToday} / ${capacity} 人`]);
-      rows.push(['集客力', `${drawOf(b, sim.policies).toFixed(1)} 倍`]);
+      rows.push(['集客力', `${leisureDraw(b.type).toFixed(1)} 倍`]);
+      rows.push(['人が来る距離の目安', `${Math.round(reach(sim.policies))} タイル`]);
       if (b.visitsToday >= capacity) rows.push(['状況', '⚠ 満員（今日はもう入れません）']);
     }
 
@@ -528,8 +532,18 @@ function stateLabel(c: Citizen): string {
   }
 }
 
-/** Day names for the rest day, so a seed's number reads as a day. */
-const DAY_NAMES = ['月', '火', '水', '木', '金', '土', '日'] as const;
+/**
+ * When this citizen's next day off is, counted in the days the clock shows.
+ */
+function restDayLabel(day: number, seed: number): string {
+  if (isRestDay(seed, day)) return '今日';
+  for (let ahead = 1; ahead <= REST_DAYS_PER_WEEK; ahead++) {
+    if (isRestDay(seed, day + ahead)) {
+      return ahead === 1 ? '明日' : `${ahead}日後（Day ${day + ahead + 1}）`;
+    }
+  }
+  return '—';
+}
 
 function speedNote(ratio: number, blockedTicks: number): string {
   if (blockedTicks > 30) return '（渋滞で停止中）';

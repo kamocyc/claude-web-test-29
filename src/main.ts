@@ -50,7 +50,11 @@ const windows: Record<PanelId, InfoWindow> = {
   budget: new InfoWindow(windowLayer, 'budget', '財政', { x: 670, y: 70, width: 300 }),
   stats: new InfoWindow(windowLayer, 'stats', '統計', { x: right(700), y: 100, width: 320 }),
   services: new InfoWindow(windowLayer, 'services', '公共', { x: 700, y: 120, width: 320 }),
-  lines: new InfoWindow(windowLayer, 'lines', '路線', { x: right(360), y: 150, width: 340 }),
+  // "路線一覧" rather than "路線": there is a *tool* called 路線, and a window
+  // and a tool with one name between them is a coin toss.
+  lines: new InfoWindow(windowLayer, 'lines', '路線一覧', {
+    x: right(360), y: 150, width: 340,
+  }),
   policies: new InfoWindow(windowLayer, 'policies', '条例', { x: 420, y: 150, width: 340 }),
   help: new InfoWindow(windowLayer, 'help', '遊びかた', { x: 380, y: 90, width: 360 }),
 };
@@ -87,20 +91,32 @@ const warningsPanel = new WarningsPanel(windows.warnings.body, {
 });
 const linesPanel = new LinesPanel(windows.lines.body, {
   onRename: (line, name) => {
+    if (!alive(line)) return;
     if (sim.world.renameLine(line, name)) say(`${name}に改名しました`);
   },
-  onRecolor: (line) => sim.world.cycleLineColor(line),
+  onRecolor: (line) => {
+    if (alive(line)) sim.world.cycleLineColor(line);
+  },
   onAddVehicle: (line) => {
+    if (!alive(line)) return;
     say(sim.world.addVehicle(line)
       ? '増便しました（待ち時間が短くなります）'
       : 'これ以上は増やせません');
   },
   onRemoveVehicle: (line) => {
+    if (!alive(line)) return;
     say(sim.world.removeVehicle(line) ? '減便しました' : '最後の1台は減らせません');
   },
   onWithdraw: (line) => {
     const name = sim.world.lines[line]?.name ?? '路線';
-    if (sim.world.withdrawLine(line)) say(`${name}を廃止しました（停留所は残ります）`);
+    if (!sim.world.withdrawLine(line)) {
+      say('その路線はもうありません');
+      return;
+    }
+    // The line being edited has just stopped existing; the stops in hand are
+    // no longer an amendment to anything.
+    if (editingLine === line) cancelLineEdit();
+    say(`${name}を廃止しました（停留所は残ります）`);
   },
   onEditStops: (line) => editLineStops(line),
   onShowTile: (tile) => showTile(tile),
@@ -152,7 +168,7 @@ function say(message: string): void {
 const hud = new Hud(topbarRoot, toolbarRoot, {
   onTool: (t) => {
     tool = t;
-    if (lineToolFor(t) === null) cancelLineEdit();
+    keepEditOnly(t);
   },
   onSpeed: (i) => sim.clock.setSpeedIndex(i),
   onToggleZones: () => (showZones = !showZones),
@@ -168,6 +184,22 @@ const hud = new Hud(topbarRoot, toolbarRoot, {
 hud.setSaveAvailable(hasSavedCity());
 windows.inspector.open();
 windows.warnings.open();
+
+/**
+ * Whether a line the panel is offering buttons for still exists.
+ *
+ * A panel row is up to a quarter of a second old, and in that time a
+ * bulldozed station can take its services with it. Without this check, a
+ * click on such a row reported whatever the failed action's other refusal
+ * happened to be -- "you cannot add any more vehicles" for a line that had
+ * stopped existing.
+ */
+function alive(line: number): boolean {
+  const it = sim.world.lines[line];
+  if (it && sim.world.lineIsAlive(it)) return true;
+  say('その路線はもうありません');
+  return false;
+}
 
 /** Take the camera to a tile and ring it, so "見る" actually shows something. */
 function showTile(tile: TileIndex): void {
@@ -199,7 +231,7 @@ attachInput(canvas, camera, {
     const next = TOOL_BY_KEY[key];
     if (!next) return;
     tool = next;
-    if (lineToolFor(next) === null) cancelLineEdit();
+    keepEditOnly(next);
   },
   onToggleZones: () => (showZones = !showZones),
   onOverlayKey: (o) => (overlay = overlay === o ? 'none' : o),
@@ -219,6 +251,27 @@ function editLineStops(id: number): void {
 function cancelLineEdit(): void {
   pendingStations = [];
   editingLine = -1;
+}
+
+/**
+ * Keep an edit in progress only while the tool in hand can still finish it.
+ *
+ * Switching 路線 to バス系統 mid-edit used to keep the stations *and* the
+ * edit, so committing refused with "that line is gone" -- which was not true
+ * and not something the player could act on. The rule is simply that an edit
+ * belongs to one mode.
+ */
+function keepEditOnly(next: Tool): void {
+  const mode = lineToolFor(next);
+  if (mode === null) {
+    cancelLineEdit();
+    return;
+  }
+  if (editingLine < 0) {
+    pendingStations = [];
+    return;
+  }
+  if (sim.world.lines[editingLine]?.mode !== mode) cancelLineEdit();
 }
 
 /** Append a clicked stop to the line being built, or remove it if repeated. */
@@ -463,7 +516,10 @@ function frame(now: number): void {
     focusTile,
     selected: inspector.selected,
     pendingStations,
-    highlightLine: linesPanel.selectedLine,
+    // Only while the window that made the selection is actually on screen.
+    // A dimmed network with no visible control to undo it is a game that has
+    // quietly broken its own map.
+    highlightLine: windows.lines.isVisible ? linesPanel.selectedLine : -1,
   });
 
   if (now > noticeUntil) notice = '';

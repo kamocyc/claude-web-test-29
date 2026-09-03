@@ -63,6 +63,12 @@ export class BudgetPanel {
     this.body.appendChild(row('　工業税', formatMoney(book.industrialTax)));
     this.body.appendChild(row('　オフィス税', formatMoney(book.officeTax)));
     this.body.appendChild(row('　維持費', `-${formatMoney(book.upkeep)}`, book.upkeep > 0));
+    // Ordinances are billed like upkeep, so they belong in the itemisation
+    // like upkeep: without this row the breakdown quietly stops adding up to
+    // 前日収支, which is the one thing this panel exists to make legible.
+    this.body.appendChild(
+      row('　条例', `-${formatMoney(book.ordinances)}`, book.ordinances > 0),
+    );
     this.body.appendChild(row('　利息', `-${formatMoney(book.interest)}`, book.interest > 0));
 
     this.body.appendChild(heading('税率'));

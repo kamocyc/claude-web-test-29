@@ -2,7 +2,6 @@ import { ticksToMinutes } from '../core/clock';
 import { tileX, tileY } from '../core/grid';
 import { IncidentKind } from '../sim/emergency';
 import type { Simulation } from '../sim/simulation';
-import { leisureReport } from '../sim/leisure';
 import { bar, note, row, section } from './widgets';
 
 const REFRESH_MS = 250;
@@ -103,13 +102,18 @@ export class ServicesPanel {
  * rather than as a number of buildings.
  */
 function leisureSection(sim: Simulation): HTMLElement {
-  const l = leisureReport(sim.world);
+  const s = sim.services.report;
+  // The satisfaction figure is the happiness model's own leisure term rather
+  // than a second count of the same thing: the HUD chip shows that number, so
+  // a panel that recomputed it would disagree with the chip for an hour at a
+  // time.
+  const satisfaction = sim.happiness.breakdown.leisure;
   return section('公園・レジャー', [
-    row('公園', `${l.parks} か所`),
-    row('競技場・遊園地', `${l.venues} か所`),
-    row('本日の来場', `${l.visitsToday} 人`),
-    row('満足度', `${Math.round(l.satisfaction)} / 100`, l.satisfaction < 40),
-    row('入れなかった世帯', `${l.turnedAway} 世帯`, l.turnedAway > 0),
+    row('公園', `${s.parks} か所`),
+    row('競技場・遊園地', `${s.venues} か所`),
+    row('本日の来場', `${s.leisureVisits} 人`),
+    row('満足度', `${Math.round(satisfaction)} / 100`, satisfaction < 40),
+    row('入れずに帰った世帯', `${s.turnedAway} 世帯`, s.turnedAway > 0),
   ]);
 }
 

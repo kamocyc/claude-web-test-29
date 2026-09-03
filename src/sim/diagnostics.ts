@@ -1,7 +1,6 @@
 import { BuildingType, CitizenState, Industry, type TileIndex } from '../core/types';
 import { industryOf, isHome, isWorkplace, type Building } from '../world/buildings';
 import { IncidentKind } from './emergency';
-import { leisureReport } from './leisure';
 import type { Simulation } from './simulation';
 
 /**
@@ -290,7 +289,7 @@ export function cityWarnings(sim: Simulation): CityWarning[] {
       severity: 'info',
       icon: '医',
       title: '病院がありません',
-      advice: '病院が届かない地区は住民の健康が下がり、幸福度と地価に効いてきます。'
+      advice: '病院が届かない地区は住民の健康が下がり、幸福度に効いてきます。'
         + '学校や消防と同じで、道路をたどって届く範囲だけが対象です。',
       count: 0,
       focus: -1,
@@ -300,16 +299,20 @@ export function cityWarnings(sim: Simulation): CityWarning[] {
   // Leisure is judged on whether people actually got out, not on how many
   // parks exist: a city with a fairground nobody can reach is the case this
   // warning is for, and a building count would call that city well provided.
-  const leisure = leisureReport(world);
-  if (world.population >= 40 && leisure.satisfaction < 35) {
+  //
+  // Both figures are read from something already computed on a slow cadence
+  // -- this function runs every frame, so counting the buildings and the
+  // citizens here would put a full city scan in the frame loop.
+  const venues = services.parks + services.venues;
+  if (world.population >= 40 && sim.happiness.breakdown.leisure < 35) {
     warnings.push({
       id: 'noLeisure',
       severity: 'info',
       icon: '園',
-      title: leisure.parks + leisure.venues === 0
+      title: venues === 0
         ? '公園やレジャー施設がありません'
         : '住民が出かけられていません',
-      advice: leisure.parks + leisure.venues === 0
+      advice: venues === 0
         ? '公園は最も安い公共施設で、まわりの地価をいちばん強く上げます。'
         : '施設が遠すぎるか、満員か、道路がつながっていません。'
           + '公園を住宅地の中に増やすと、いちばん確実に効きます。',

@@ -56,8 +56,9 @@ const CRIME_WEIGHT = 0.45;
  * Why a tile is worth what it is: the same terms `update` sums, kept apart so
  * the panel can show the player which of their decisions moved the number.
  *
- * Every field is in land-value points, and they add up: `base` plus the four
- * amenities minus `noise` is the value the tile is heading towards.
+ * Every field is in land-value points, and they add up: `base` plus the
+ * amenities, minus the noise and the crime, is the value the tile is heading
+ * towards.
  */
 export interface LandValueFactors {
   /** What bare, unimproved, quiet ground is worth. */

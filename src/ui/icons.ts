@@ -152,9 +152,6 @@ const ICONS = {
   winPolicies:
     '<path d="M6 3.5h8l4 4v13H6z"/><path d="M14 3.5v4h4"/>'
     + '<path d="M8.5 12h7M8.5 15h7M8.5 18h4"/>',
-  // A heart in a shield: leisure and health, for the wellbeing window.
-  winLeisure:
-    '<path d="M12 20.5c-4.5-2.6-7.5-5.6-7.5-9A3.9 3.9 0 0 1 12 9.4a3.9 3.9 0 0 1 7.5 2.1c0 3.4-3 6.4-7.5 9z"/>',
   randomCitizen:
     '<circle cx="10" cy="7.6" r="3.6"/><path d="M3.8 20.5a6.2 6.2 0 0 1 12.4 0"/>'
     + '<path d="M16.5 5.5h4v4"/><path d="M20.5 5.5 16.8 9.2"/>',

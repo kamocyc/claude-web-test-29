@@ -7,6 +7,8 @@ import {
   MAX_RAISE,
   MAX_RAIL_STEP,
   MAX_TERRAIN_HEIGHT,
+  UPKEEP_PER_BUS,
+  UPKEEP_PER_TRAIN,
 } from '../config';
 import { idx, neighbors } from '../core/grid';
 import { Rng } from '../core/rng';
@@ -686,7 +688,7 @@ export class World {
       line: line.id,
       s: at,
       v: 0,
-      nextStop: 0,
+      nextStop: nextStopFrom(line, at),
       dwellUntil: 0,
       passengers: [],
       x: 0,
@@ -890,6 +892,13 @@ export class World {
     line.stopAt = stopAt.slice();
     line.stopStation = stopAt.map((_, i) => stationForStop(line.stations, i));
 
+    // Everybody holding a plan for the old shape of this line has to be let
+    // go of it, not only the people aboard. A rider waiting at a stop the
+    // service no longer calls at would stand there for good, and one waiting
+    // at a stop it still calls at holds stop *indices* into a `stopAt` that
+    // has just been renumbered. Both re-plan from where they are.
+    this.releaseRidersOf(line.id);
+
     const count = Math.max(1, line.vehicles.length);
     const vehicles = line.vehicles.slice();
     line.vehicles = [];
@@ -928,7 +937,7 @@ export class World {
     if (!vehicle) return;
     for (const cid of vehicle.passengers) {
       const c = this.citizens[cid];
-      if (c) c.path = null;
+      if (c) releaseRider(c);
     }
     vehicle.passengers = [];
     vehicle.v = 0;
@@ -938,6 +947,13 @@ export class World {
       bus.path = null;
     } else {
       (vehicle as Train).line = -1;
+    }
+  }
+
+  /** Everybody waiting for or riding this line gives up their plan. */
+  private releaseRidersOf(id: LineId): void {
+    for (const c of this.citizens) {
+      if (c.ride && c.ride.line === id) releaseRider(c);
     }
   }
 
@@ -1042,6 +1058,23 @@ export class World {
     for (const b of this.buildings) {
       if (b.alive) total += specFor(b.type).upkeep;
     }
+    return total + this.fleetUpkeep;
+  }
+
+  /**
+   * What the trains and buses cost to run, per day.
+   *
+   * Counted from the lines rather than from the vehicle arrays, because those
+   * arrays keep the slots of withdrawn services: a retired bus sitting in its
+   * slot waiting to be reused is not a bus the city is paying for.
+   */
+  get fleetUpkeep(): number {
+    let total = 0;
+    for (const line of this.lines) {
+      if (!this.lineIsAlive(line)) continue;
+      const each = line.mode === LineMode.Rail ? UPKEEP_PER_TRAIN : UPKEEP_PER_BUS;
+      total += line.vehicles.length * each;
+    }
     return total;
   }
 
@@ -1050,6 +1083,38 @@ export class World {
     for (let i = 0; i < layer.length; i++) n += layer[i];
     return n;
   }
+}
+
+/**
+ * The first stop a vehicle standing `at` tiles along the route will reach.
+ *
+ * A train put down in the middle of a line used to be told it was heading for
+ * stop 0, which on a round trip is the tile it started from -- so it drove the
+ * rest of the lap without opening its doors, past every platform on the way,
+ * while the panel had already divided the headway by the extra train. `stopAt`
+ * ascends, so the answer is the first entry at or beyond the train, wrapping
+ * to the first stop when it is past the last one.
+ */
+function nextStopFrom(line: TransitLine, at: number): number {
+  const found = line.stopAt.findIndex((s) => s >= at);
+  return found < 0 ? 0 : found;
+}
+
+/**
+ * Let go of a ride that is not going to happen.
+ *
+ * Clearing the itinerary is all it takes: `Simulation.rescueOrphanedRiders`
+ * looks for exactly this -- somebody waiting or riding with no line to ride
+ * -- and restarts their journey on the next tick, which is the same path a
+ * withdrawn line already went down. Doing the re-planning here instead would
+ * be a second copy of it inside the world, which cannot see the clock or the
+ * routing queue.
+ */
+function releaseRider(c: Citizen): void {
+  c.ride = null;
+  c.boardedVehicle = -1;
+  c.path = null;
+  c.v = 0;
 }
 
 /**

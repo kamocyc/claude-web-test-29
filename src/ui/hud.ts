@@ -52,7 +52,7 @@ export interface HudState {
  * bottom, and the map in between with nothing on it.
  *
  * The bottom bar is **one row of icons in labelled groups** -- 選択 / 道路 /
- * 鉄道 / バス / 区画 / 公共 / 撤去 / ビュー / ウィンドウ / システム. It used to be
+ * 鉄道 / バス / 区画 / 公共 / レジャー / 撤去 / ビュー / ウィンドウ / システム. It used to be
  * two rows of wrapping text buttons, which meant the buttons moved whenever the
  * window was resized: a player who had learnt where 撤去 was found it somewhere
  * else on a narrower screen, and the bar ate a fifth of the map. Icons in a
