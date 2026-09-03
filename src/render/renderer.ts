@@ -58,6 +58,15 @@ export interface RenderOptions {
   showIssues: boolean;
   /** A building to ring, because the player asked to be shown it. */
   focusTile: TileIndex;
+  /**
+   * A line the lines window has selected, or -1.
+   *
+   * Drawn by dimming the others rather than by colouring this one differently:
+   * a network of six services is unreadable when they overlap, and the
+   * question the panel is asking -- "where does *this* one go?" -- is answered
+   * by taking the other five away.
+   */
+  highlightLine: number;
 }
 
 export class Renderer {
@@ -90,7 +99,7 @@ export class Renderer {
     this.raised.length = 0;
     this.drawTiles(sim, view, opts);
     this.drawRaised(sim);
-    this.drawLines(sim);
+    this.drawLines(sim, opts.highlightLine);
     this.drawSignals(sim, view);
     this.drawAgents(sim, alpha, opts);
     this.drawLorries(sim, alpha);
@@ -474,13 +483,14 @@ export class Renderer {
   }
 
   /** Each line's route drawn in its own colour, so the network is readable. */
-  private drawLines(sim: Simulation): void {
+  private drawLines(sim: Simulation, highlight: number): void {
     const { ctx, camera } = this;
     for (const line of sim.world.lines) {
       if (!sim.world.lineIsAlive(line)) continue;
+      const lit = highlight < 0 || line.id === highlight;
       ctx.strokeStyle = line.color;
-      ctx.globalAlpha = 0.55;
-      ctx.lineWidth = Math.max(1.5, camera.zoom * 0.16);
+      ctx.globalAlpha = lit ? (highlight < 0 ? 0.55 : 0.95) : 0.12;
+      ctx.lineWidth = Math.max(1.5, camera.zoom * (lit && highlight >= 0 ? 0.3 : 0.16));
       // A bus route is dashed: it is a claim about roads that belong to
       // everybody, not a railway that belongs to the line.
       ctx.setLineDash(line.mode === LineMode.Road ? [camera.zoom * 0.5, camera.zoom * 0.4] : []);
@@ -493,6 +503,22 @@ export class Renderer {
       ctx.stroke();
       ctx.globalAlpha = 1;
       ctx.setLineDash([]);
+      if (lit && highlight >= 0) this.ringStops(sim, line);
+    }
+  }
+
+  /** Ring the stops of the highlighted line, so its calling points stand out. */
+  private ringStops(sim: Simulation, line: { stations: readonly number[]; color: string }): void {
+    const { ctx, camera } = this;
+    ctx.strokeStyle = line.color;
+    ctx.lineWidth = 2;
+    for (const id of line.stations) {
+      const stop = sim.world.buildings[id];
+      if (!stop || !stop.alive) continue;
+      const p = camera.worldToScreen(tileCenterX(stop.tile), tileCenterY(stop.tile));
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, Math.max(6, camera.zoom * 0.6), 0, Math.PI * 2);
+      ctx.stroke();
     }
   }
 
@@ -1013,6 +1039,10 @@ const BUILDING_COLORS: Record<BuildingType, string> = {
   [BuildingType.Mine]: COLORS.mining,
   [BuildingType.Station]: COLORS.station,
   [BuildingType.PowerPlant]: COLORS.power,
+  [BuildingType.Hospital]: COLORS.hospital,
+  [BuildingType.Park]: COLORS.park,
+  [BuildingType.Stadium]: COLORS.stadium,
+  [BuildingType.AmusementPark]: COLORS.amusementPark,
 };
 
 /** Warning colours, keyed by the severity the diagnostics reported. */

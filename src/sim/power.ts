@@ -2,6 +2,7 @@ import { MAP_SIZE, POWER_PLANT_OUTPUT } from '../config';
 import { neighbors } from '../core/grid';
 import { BuildingType, type TileIndex } from '../core/types';
 import { specFor, type Building } from '../world/buildings';
+import type { Policies } from './policies';
 import type { World } from '../world/world';
 
 /** One connected road network, and what the buildings hanging off it need. */
@@ -64,8 +65,14 @@ export class PowerGrid {
    * Recompute who has power. Called on a slow cadence: the answer only changes
    * when a building appears, a plant is built, or the roads change.
    */
-  update(world: World): void {
+  update(world: World, policies?: Policies): void {
     this.refreshComponents(world);
+    // What a building draws is the spec's figure as amended by the city's
+    // by-laws: the energy ordinance is a discount on this one number, so the
+    // grid, the report and the panel all see the same reduced demand.
+    const draws = (b: Building): number => policies
+      ? policies.powerDraw(specFor(b.type).power)
+      : specFor(b.type).power;
 
     let plants = 0;
     const supply = new Float64Array(this.gridCount + 1);
@@ -92,7 +99,7 @@ export class PowerGrid {
         supply[grid] += POWER_PLANT_OUTPUT * Math.max(0.25, staffing);
         continue;
       }
-      demand[grid] += specFor(b.type).power;
+      demand[grid] += draws(b);
       members[grid].push(b);
     }
 
@@ -102,7 +109,7 @@ export class PowerGrid {
       let remaining = supply[grid];
       let dark = 0;
       for (const b of members[grid]) {
-        const draw = specFor(b.type).power;
+        const draw = draws(b);
         if (remaining >= draw) {
           remaining -= draw;
           b.powered = true;

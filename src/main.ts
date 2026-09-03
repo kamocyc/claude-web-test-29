@@ -20,11 +20,14 @@ import { HelpPanel } from './ui/help';
 import { InfoWindow } from './ui/window';
 import { applyTool, isDragTool, lineToolFor, Tool, TOOL_BY_KEY } from './ui/tools';
 import { BudgetPanel, BUDGET_HELP } from './ui/budget';
+import { LinesPanel, LINES_HELP } from './ui/lines';
+import { PoliciesPanel, POLICIES_HELP } from './ui/policies';
 import type { Overlay } from './render/renderer';
-import { createBusLine, createLineThrough } from './world/lineBuilder';
+import { createBusLine, createLineThrough, reshapeLineThrough } from './world/lineBuilder';
 import { LineMode, specForMode } from './world/transit';
 import { hasSavedCity, loadFromStorage, saveToStorage } from './world/persistence';
 import { newGame, STARTING_VIEW } from './world/scenario';
+import { ORDINANCES } from './sim/policies';
 
 const canvas = document.getElementById('map') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
@@ -47,6 +50,8 @@ const windows: Record<PanelId, InfoWindow> = {
   budget: new InfoWindow(windowLayer, 'budget', '財政', { x: 670, y: 70, width: 300 }),
   stats: new InfoWindow(windowLayer, 'stats', '統計', { x: right(700), y: 100, width: 320 }),
   services: new InfoWindow(windowLayer, 'services', '公共', { x: 700, y: 120, width: 320 }),
+  lines: new InfoWindow(windowLayer, 'lines', '路線', { x: right(360), y: 150, width: 340 }),
+  policies: new InfoWindow(windowLayer, 'policies', '条例', { x: 420, y: 150, width: 340 }),
   help: new InfoWindow(windowLayer, 'help', '遊びかた', { x: 380, y: 90, width: 360 }),
 };
 
@@ -60,6 +65,8 @@ windows.power.setHelp(POWER_HELP);
 windows.budget.setHelp(BUDGET_HELP);
 windows.stats.setHelp(STATS_HELP);
 windows.services.setHelp(SERVICES_HELP);
+windows.lines.setHelp(LINES_HELP);
+windows.policies.setHelp(POLICIES_HELP);
 
 /**
  * The simulation is a `let` rather than a `const` because loading a save
@@ -77,6 +84,32 @@ const servicesPanel = new ServicesPanel(windows.services.body);
 new HelpPanel(windows.help.body);
 const warningsPanel = new WarningsPanel(windows.warnings.body, {
   onShowMe: (tile) => showTile(tile),
+});
+const linesPanel = new LinesPanel(windows.lines.body, {
+  onRename: (line, name) => {
+    if (sim.world.renameLine(line, name)) say(`${name}に改名しました`);
+  },
+  onRecolor: (line) => sim.world.cycleLineColor(line),
+  onAddVehicle: (line) => {
+    say(sim.world.addVehicle(line)
+      ? '増便しました（待ち時間が短くなります）'
+      : 'これ以上は増やせません');
+  },
+  onRemoveVehicle: (line) => {
+    say(sim.world.removeVehicle(line) ? '減便しました' : '最後の1台は減らせません');
+  },
+  onWithdraw: (line) => {
+    const name = sim.world.lines[line]?.name ?? '路線';
+    if (sim.world.withdrawLine(line)) say(`${name}を廃止しました（停留所は残ります）`);
+  },
+  onEditStops: (line) => editLineStops(line),
+  onShowTile: (tile) => showTile(tile),
+});
+const policiesPanel = new PoliciesPanel(windows.policies.body, {
+  onToggle: (ordinance) => {
+    const on = sim.policies.toggle(ordinance);
+    say(`${ORDINANCES[ordinance].name}を${on ? '施行しました' : '廃止しました'}`);
+  },
 });
 const budgetPanel = new BudgetPanel(windows.budget.body, {
   onRate: (category, delta) => sim.economy.setRate(category, sim.economy.rates[category] + delta),
@@ -97,6 +130,17 @@ let focusUntil = 0;
 
 /** Stations picked so far with the line tool, in order. */
 let pendingStations: BuildingId[] = [];
+/**
+ * The line being re-routed, or -1 when the line tool is opening a new one.
+ *
+ * Editing a service reuses the whole of the line-building interaction rather
+ * than inventing a second one: the stops go back into the player's hand, they
+ * add or remove some, and committing re-lays the route. The only difference is
+ * this id, which decides whether the result is a new line or the same one
+ * amended -- and keeping the same one is what preserves its name, its colour
+ * and its ridership.
+ */
+let editingLine = -1;
 let notice = '';
 let noticeUntil = 0;
 
@@ -108,7 +152,7 @@ function say(message: string): void {
 const hud = new Hud(topbarRoot, toolbarRoot, {
   onTool: (t) => {
     tool = t;
-    if (lineToolFor(t) === null) pendingStations = [];
+    if (lineToolFor(t) === null) cancelLineEdit();
   },
   onSpeed: (i) => sim.clock.setSpeedIndex(i),
   onToggleZones: () => (showZones = !showZones),
@@ -116,9 +160,7 @@ const hud = new Hud(topbarRoot, toolbarRoot, {
   onOverlay: (o) => (overlay = overlay === o ? 'none' : o),
   onPickRandom: pickRandomCitizen,
   onCommitLine: commitLine,
-  onCancelLine: () => {
-    pendingStations = [];
-  },
+  onCancelLine: () => cancelLineEdit(),
   onSave: saveCity,
   onLoad: loadCity,
   onPanel: (panel) => windows[panel].toggle(),
@@ -157,12 +199,27 @@ attachInput(canvas, camera, {
     const next = TOOL_BY_KEY[key];
     if (!next) return;
     tool = next;
-    if (lineToolFor(next) === null) pendingStations = [];
+    if (lineToolFor(next) === null) cancelLineEdit();
   },
   onToggleZones: () => (showZones = !showZones),
   onOverlayKey: (o) => (overlay = overlay === o ? 'none' : o),
   isDragging: () => isDragTool(tool),
 });
+
+/** Put an existing line's stops back in the player's hand, to be amended. */
+function editLineStops(id: number): void {
+  const line = sim.world.lines[id];
+  if (!line || !sim.world.lineIsAlive(line)) return;
+  editingLine = id;
+  tool = line.mode === LineMode.Rail ? Tool.Line : Tool.BusLine;
+  pendingStations = line.stations.slice();
+  say(`${line.name}を編集中: 停留所を足すか、押し直して外してください`);
+}
+
+function cancelLineEdit(): void {
+  pendingStations = [];
+  editingLine = -1;
+}
 
 /** Append a clicked stop to the line being built, or remove it if repeated. */
 function pickStop(tile: TileIndex, mode: LineMode): void {
@@ -176,6 +233,13 @@ function pickStop(tile: TileIndex, mode: LineMode): void {
   const at = pendingStations.lastIndexOf(b.id);
   if (at === pendingStations.length - 1 && at >= 0) {
     pendingStations.pop();
+    return;
+  }
+  // While editing, clicking a stop already on the line takes it off: that is
+  // the only way to shorten a route, and the "click the last one again"
+  // shortcut alone cannot reach a stop in the middle.
+  if (editingLine >= 0 && at >= 0) {
+    pendingStations.splice(at, 1);
     return;
   }
   pendingStations.push(b.id);
@@ -194,6 +258,11 @@ function commitLine(): void {
 
   if (pendingStations.length < 2) {
     say(mode === LineMode.Rail ? '路線には2駅以上必要です' : '系統には2つ以上のバス停が必要です');
+    return;
+  }
+
+  if (editingLine >= 0) {
+    commitLineEdit(mode);
     return;
   }
 
@@ -221,6 +290,37 @@ function commitLine(): void {
   pendingStations = [];
 }
 
+/**
+ * Apply an edit to an existing service.
+ *
+ * Nothing is changed unless the new shape works, so a player who picks an
+ * impossible route still has the line they had -- which is what makes trying
+ * one safe.
+ */
+function commitLineEdit(mode: LineMode): void {
+  const line = sim.world.lines[editingLine];
+  if (!line || !sim.world.lineIsAlive(line) || line.mode !== mode) {
+    say('その路線はもうありません');
+    cancelLineEdit();
+    return;
+  }
+  const { line: changed, builtTrack } = reshapeLineThrough(
+    sim.world,
+    editingLine,
+    pendingStations,
+  );
+  if (!changed) {
+    say(mode === LineMode.Rail
+      ? '駅どうしを結ぶ線路を敷けません（元の経路のままです）'
+      : 'バス停どうしが道路でつながっていません（元の経路のままです）');
+    return;
+  }
+  say(builtTrack
+    ? `${changed.name}の経路を変更しました（不足していた線路を敷設しました）`
+    : `${changed.name}の経路を変更しました`);
+  cancelLineEdit();
+}
+
 // --- Save / load -----------------------------------------------------------
 
 function saveCity(): void {
@@ -244,8 +344,9 @@ function loadCity(): void {
     // whatever the player was watching at.
     loaded.clock.setSpeedIndex(sim.clock.speedIndex);
     sim = loaded;
-    pendingStations = [];
+    cancelLineEdit();
     inspector.clear();
+    linesPanel.clear();
     say('保存した街を読み込みました');
   } catch (e) {
     say(e instanceof Error ? e.message : '読み込みに失敗しました');
@@ -362,6 +463,7 @@ function frame(now: number): void {
     focusTile,
     selected: inspector.selected,
     pendingStations,
+    highlightLine: linesPanel.selectedLine,
   });
 
   if (now > noticeUntil) notice = '';
@@ -372,6 +474,7 @@ function frame(now: number): void {
     showIssues,
     pendingStations,
     notice,
+    editingLine: editingLine >= 0 ? sim.world.lines[editingLine]?.name ?? null : null,
     openPanels: openWindows(),
   });
 
@@ -385,6 +488,8 @@ function frame(now: number): void {
   if (windows.budget.isVisible) budgetPanel.update(sim, now);
   if (windows.power.isVisible) powerPanel.update(sim, now);
   if (windows.services.isVisible) servicesPanel.update(sim, now);
+  if (windows.lines.isVisible) linesPanel.update(sim, now);
+  if (windows.policies.isVisible) policiesPanel.update(sim, now);
   if (windows.warnings.isVisible) warningsPanel.update(sim, now);
 
   requestAnimationFrame(frame);

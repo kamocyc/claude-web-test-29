@@ -40,6 +40,17 @@ export interface Building {
   soldToday: number;
   /** Sim-hours this building has spent unable to get what it needs. */
   starvedHours: number;
+
+  // --- Leisure -------------------------------------------------------------
+
+  /**
+   * Visitors a leisure venue has taken today, reset with the day's books.
+   *
+   * The crowding counter, and the one honest way to show a player that their
+   * one big stadium is not serving the city: it is the same figure the venue
+   * turns people away on.
+   */
+  visitsToday: number;
 }
 
 /**
@@ -143,6 +154,27 @@ const SPECS: Record<BuildingType, BuildingSpec> = {
     capacity: 8, industry: Industry.None, power: 10, noise: 2,
     rawPerHour: 0, outputPerHour: 0, storage: 0, upkeep: 850, wagePerJob: 38,
   },
+  [BuildingType.Hospital]: {
+    capacity: 16, industry: Industry.None, power: 22, noise: 3,
+    rawPerHour: 0, outputPerHour: 0, storage: 0, upkeep: 1_500, wagePerJob: 44,
+  },
+  // The three leisure venues. A park has no staff, no power worth speaking of
+  // and no noise -- it is the one civic building that only ever improves the
+  // ground it stands on, which is why it is also the cheapest. The two big
+  // venues are the opposite: they employ people, draw the whole city across
+  // town and are loud enough that where they go is a real decision.
+  [BuildingType.Park]: {
+    capacity: 0, industry: Industry.None, power: 1, noise: 0,
+    rawPerHour: 0, outputPerHour: 0, storage: 0, upkeep: 120, wagePerJob: 0,
+  },
+  [BuildingType.Stadium]: {
+    capacity: 14, industry: Industry.None, power: 24, noise: 7,
+    rawPerHour: 0, outputPerHour: 0, storage: 0, upkeep: 2_100, wagePerJob: 32,
+  },
+  [BuildingType.AmusementPark]: {
+    capacity: 20, industry: Industry.None, power: 30, noise: 6,
+    rawPerHour: 0, outputPerHour: 0, storage: 0, upkeep: 3_200, wagePerJob: 30,
+  },
 };
 
 export function specFor(type: BuildingType): BuildingSpec {
@@ -181,7 +213,59 @@ export function isCivic(type: BuildingType): boolean {
     || type === BuildingType.BusStop
     || type === BuildingType.School
     || type === BuildingType.FireStation
-    || type === BuildingType.PoliceStation;
+    || type === BuildingType.PoliceStation
+    || type === BuildingType.Hospital
+    || isLeisure(type);
+}
+
+/** True for the three places people go in their own time. */
+export function isLeisure(type: BuildingType): boolean {
+  return type === BuildingType.Park
+    || type === BuildingType.Stadium
+    || type === BuildingType.AmusementPark;
+}
+
+/**
+ * How far a venue pulls people, and how much good one visit does them.
+ *
+ * One number does both jobs on purpose. A visit is worth `LEISURE_VISIT` days
+ * of recreation scaled by the draw, and the same draw divided by distance is
+ * what decides where somebody goes -- so a venue that is worth travelling for
+ * is, by construction, a venue that is worth having travelled to. Splitting
+ * them would let a building be attractive and disappointing at once, which is
+ * a bug rather than a design.
+ */
+export function leisureDraw(type: BuildingType): number {
+  switch (type) {
+    case BuildingType.Park:
+      return 1;
+    case BuildingType.Stadium:
+      return 2.4;
+    case BuildingType.AmusementPark:
+      return 3.4;
+    default:
+      return 0;
+  }
+}
+
+/**
+ * How many visits a venue can take in a day before it is simply full.
+ *
+ * A park is small and there are meant to be many of them; the fairground
+ * takes ten times as many people and still cannot serve a whole city, which
+ * is what stops one expensive building from answering the question forever.
+ */
+export function leisureCapacity(type: BuildingType): number {
+  switch (type) {
+    case BuildingType.Park:
+      return 40;
+    case BuildingType.Stadium:
+      return 220;
+    case BuildingType.AmusementPark:
+      return 360;
+    default:
+      return 0;
+  }
 }
 
 /** True for the two stations that keep emergency vehicles in the yard. */

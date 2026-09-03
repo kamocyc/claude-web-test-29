@@ -19,7 +19,7 @@ import type { Building } from './buildings';
 import type { LineMode, TransitLine, Train } from './transit';
 import { World } from './world';
 
-export const SAVE_VERSION = 6;
+export const SAVE_VERSION = 7;
 export const SAVE_KEY = 'city-sim.save';
 
 /**
@@ -55,9 +55,16 @@ export interface SaveData {
   emergencyBucket: number;
   settledDay: number;
   money: SavedEconomy;
+  /** The by-laws in force, as `Ordinance` values. */
+  ordinances: number[];
+  /** Rides completed as of the last close of books, for the fare subsidy. */
+  ridershipAtDayStart: number;
   /** Base64 of the per-tile float fields (Float32, MAP_SIZE^2 each). */
   traffic: string;
   noise: string;
+  /** The part-finished noise tally, which no amount of replaying recovers. */
+  noiseTraffic: string;
+  noiseSamples: number;
   landValue: string;
   crime: string;
   /** Base64 of the byte layers, each MAP_SIZE^2 long. */
@@ -101,6 +108,8 @@ interface SavedBuilding {
   goods: number;
   sold: number;
   starved: number;
+  /** Visitors a leisure venue has taken today. */
+  visits: number;
 }
 
 interface SavedCitizen {
@@ -133,6 +142,10 @@ interface SavedCitizen {
   happy: number;
   unhappy: number;
   lastTrip: number;
+  leisure: number;
+  outingFailed: boolean;
+  nextLeisure: number;
+  health: number;
   path?: TileIndex[];
   after?: TileIndex[];
   ride?: RideLeg;
@@ -226,6 +239,8 @@ export function serialize(sim: Simulation): SaveData {
     servicesBucket: sim.lastServicesBucket,
     emergencyBucket: sim.lastEmergencyBucket,
     settledDay: sim.lastSettledDay,
+    ordinances: sim.policies.snapshot(),
+    ridershipAtDayStart: sim.ridershipAtDayStart,
     money: {
       balance: sim.economy.balance,
       debt: sim.economy.debt,
@@ -234,6 +249,8 @@ export function serialize(sim: Simulation): SaveData {
     },
     traffic: encodeBytes(new Uint8Array(sim.traffic.snapshot().buffer)),
     noise: encodeBytes(new Uint8Array(sim.noise.snapshot().buffer)),
+    noiseTraffic: encodeBytes(new Uint8Array(sim.noise.snapshotTally().traffic.buffer)),
+    noiseSamples: sim.noise.snapshotTally().samples,
     landValue: encodeBytes(new Uint8Array(sim.landValue.snapshot().buffer)),
     crime: encodeBytes(new Uint8Array(sim.crime.snapshot().buffer)),
     terrain: encodeBytes(world.map.terrain),
@@ -273,6 +290,7 @@ function saveBuilding(b: Building): SavedBuilding {
     goods: b.goodsStock,
     sold: b.soldToday,
     starved: b.starvedHours,
+    visits: b.visitsToday,
   };
 }
 
@@ -307,6 +325,10 @@ function saveCitizen(c: Citizen): SavedCitizen {
     happy: c.happiness,
     unhappy: c.unhappyHours,
     lastTrip: c.lastTripTicks,
+    leisure: c.leisure,
+    outingFailed: c.lastOutingFailed,
+    nextLeisure: c.nextLeisureTick,
+    health: c.health,
   };
   if (c.path) out.path = c.path.slice();
   if (c.legAfterRide) out.after = c.legAfterRide.slice();
@@ -443,6 +465,7 @@ export function deserialize(data: SaveData): Simulation {
       goodsStock: b.goods,
       soldToday: b.sold,
       starvedHours: b.starved,
+      visitsToday: b.visits,
     };
     world.buildings.push(building);
     if (building.alive) map.building[building.tile] = id;
@@ -489,6 +512,10 @@ export function deserialize(data: SaveData): Simulation {
       lastShopFailed: c.shopFailed,
       nextShopTick: c.nextShop,
       left: false,
+      leisure: c.leisure,
+      lastOutingFailed: c.outingFailed,
+      nextLeisureTick: c.nextLeisure,
+      health: c.health,
     });
   });
 
@@ -611,11 +638,17 @@ export function deserialize(data: SaveData): Simulation {
     rates: data.money.rates,
     spentOnBuilding: data.money.spent,
   });
+  sim.policies.restore(data.ordinances ?? []);
+  // Whatever the save says the ridership counter stood at when its books last
+  // closed. Recomputing it from the lines instead would hand the city a free
+  // day of fare subsidy on every load.
+  sim.ridershipAtDayStart = data.ridershipAtDayStart ?? 0;
   sim.stats.restore(data.completedTrips ?? 0);
   sim.stats.sample(world);
 
   sim.traffic.restore(decodeFloatField(data.traffic));
   sim.noise.restore(decodeFloatField(data.noise));
+  sim.noise.restoreTally(decodeFloatField(data.noiseTraffic ?? ''), data.noiseSamples ?? 0);
   sim.landValue.restore(decodeFloatField(data.landValue));
   sim.crime.restore(decodeFloatField(data.crime));
   sim.emergency.restore(data.incidents ?? []);
@@ -628,7 +661,7 @@ export function deserialize(data: SaveData): Simulation {
   //
   // So the solve below is only for the report the panel shows; the flags it
   // writes are then replaced by the ones the save carries.
-  sim.power.update(world);
+  sim.power.update(world, sim.policies);
   data.buildings.forEach((b, id) => {
     world.buildings[id].powered = b.powered;
   });

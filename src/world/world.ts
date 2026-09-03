@@ -36,6 +36,7 @@ import { TileNetwork } from './tileNetwork';
 import type { Lorry } from '../sim/lorry';
 import { BUS_ID_BASE, createBus, type Bus } from '../sim/bus';
 import { UnitState, type EmergencyUnit } from '../sim/emergency';
+import { setTrainPosition } from '../sim/trains';
 import { layoutRoadRoute } from './lineBuilder';
 import {
   LINE_COLORS,
@@ -535,6 +536,7 @@ export class World {
       goodsStock: 0,
       soldToday: 0,
       starvedHours: 0,
+      visitsToday: 0,
     };
     this.buildings.push(b);
     this.map.building[tile] = b.id;
@@ -667,23 +669,35 @@ export class World {
    */
   private addTrains(line: TransitLine, count: number): void {
     const lap = line.route.length - 1;
-    for (let i = 0; i < count; i++) {
-      const train: Train = {
-        id: this.trains.length,
-        line: line.id,
-        s: (lap * i) / count,
-        v: 0,
-        nextStop: 0,
-        dwellUntil: 0,
-        passengers: [],
-        x: 0,
-        y: 0,
-        prevX: 0,
-        prevY: 0,
-      };
-      this.trains.push(train);
-      line.vehicles.push(train.id);
-    }
+    for (let i = 0; i < count; i++) this.addTrain(line, (lap * i) / count);
+  }
+
+  /**
+   * Put one more train on a line, at `at` tiles along the route.
+   *
+   * Retired slots are reused the way the buses' are: a train whose line was
+   * withdrawn keeps its place in the array, so ids stay stable and an
+   * abandoned railway does not leak a slot per train forever.
+   */
+  private addTrain(line: TransitLine, at: number): Train {
+    const slot = this.trains.findIndex((t) => t.line < 0);
+    const train: Train = {
+      id: slot >= 0 ? slot : this.trains.length,
+      line: line.id,
+      s: at,
+      v: 0,
+      nextStop: 0,
+      dwellUntil: 0,
+      passengers: [],
+      x: 0,
+      y: 0,
+      prevX: 0,
+      prevY: 0,
+    };
+    if (slot >= 0) this.trains[slot] = train;
+    else this.trains.push(train);
+    line.vehicles.push(train.id);
+    return train;
   }
 
   /**
@@ -697,19 +711,24 @@ export class World {
   private addBuses(line: TransitLine, count: number): void {
     const stops = line.stopAt.length;
     for (let i = 0; i < count; i++) {
-      const at = Math.round((stops * i) / count) % stops;
-      const stop = this.buildings[line.stopStation[at]];
-      const slot = this.buses.findIndex((b) => b.line < 0);
-      const bus = createBus(
-        slot >= 0 ? slot : this.buses.length,
-        line.id,
-        at,
-        stop ? stop.tile : line.route[0],
-      );
-      if (slot >= 0) this.buses[slot] = bus;
-      else this.buses.push(bus);
-      line.vehicles.push(bus.id);
+      this.addBus(line, Math.round((stops * i) / count) % stops);
     }
+  }
+
+  /** Put one more bus on a route, starting from the stop numbered `at`. */
+  private addBus(line: TransitLine, at: number): Bus {
+    const stop = this.buildings[line.stopStation[at]];
+    const slot = this.buses.findIndex((b) => b.line < 0);
+    const bus = createBus(
+      slot >= 0 ? slot : this.buses.length,
+      line.id,
+      at,
+      stop ? stop.tile : line.route[0],
+    );
+    if (slot >= 0) this.buses[slot] = bus;
+    else this.buses.push(bus);
+    line.vehicles.push(bus.id);
+    return bus;
   }
 
   /**
@@ -759,31 +778,213 @@ export class World {
     }
   }
 
+  // --- Editing a line ------------------------------------------------------
+  // A line is not finished the moment it opens: the city grows past it, a
+  // route turns out to need another stop, three trains turn out to be two too
+  // many for the traffic it carries. Everything below is the same line being
+  // amended rather than a new one -- the id, the name, the colour and the
+  // running ridership total survive, which is what makes the figures in the
+  // panel worth reading over more than a day.
+
+  /** The most vehicles one line may work, so a player cannot print capacity. */
+  static readonly MAX_VEHICLES = 8;
+
+  renameLine(id: LineId, name: string): boolean {
+    const line = this.lines[id];
+    const trimmed = name.trim();
+    if (!line || !this.lineIsAlive(line) || trimmed === '') return false;
+    line.name = trimmed.slice(0, 24);
+    this.revision++;
+    return true;
+  }
+
+  /** Step a line on to the next colour in the palette the map draws it with. */
+  cycleLineColor(id: LineId): boolean {
+    const line = this.lines[id];
+    if (!line || !this.lineIsAlive(line)) return false;
+    const at = LINE_COLORS.indexOf(line.color as (typeof LINE_COLORS)[number]);
+    line.color = LINE_COLORS[(at + 1) % LINE_COLORS.length];
+    this.revision++;
+    return true;
+  }
+
+  /**
+   * Put one more vehicle on a line: the cheap half of the frequency lever.
+   *
+   * A train is inserted into the *largest gap* between the ones already
+   * running, rather than at the terminus, because the thing the player is
+   * buying is a shorter wait -- and two trains nose to tail are one train with
+   * twice the upkeep. A bus goes to the stop that has the fewest buses heading
+   * for it, which is the same idea over a network that has no stored position.
+   */
+  addVehicle(id: LineId): boolean {
+    const line = this.lines[id];
+    if (!line || !this.lineIsAlive(line)) return false;
+    if (line.vehicles.length >= World.MAX_VEHICLES) return false;
+
+    if (line.mode === LineMode.Rail) {
+      const train = this.addTrain(line, this.largestGap(line));
+      setTrainPosition(line, train);
+      train.prevX = train.x;
+      train.prevY = train.y;
+    } else {
+      this.addBus(line, this.emptiestStop(line));
+    }
+    this.revision++;
+    return true;
+  }
+
+  /**
+   * Take a vehicle off a line, preferring an empty one.
+   *
+   * Never the last one: a line with no vehicles is a line that quietly stops
+   * running while still charging the city for its stations, which is a worse
+   * thing to be able to do by accident than withdrawing it outright.
+   */
+  removeVehicle(id: LineId): boolean {
+    const line = this.lines[id];
+    if (!line || !this.lineIsAlive(line) || line.vehicles.length <= 1) return false;
+
+    let chosen = line.vehicles[line.vehicles.length - 1];
+    let fewest = Infinity;
+    for (const vid of line.vehicles) {
+      const aboard = this.vehicleOn(line, vid)?.passengers.length ?? 0;
+      if (aboard < fewest) {
+        fewest = aboard;
+        chosen = vid;
+      }
+    }
+    line.vehicles = line.vehicles.filter((vid) => vid !== chosen);
+    this.retireVehicle(line, chosen);
+    this.revision++;
+    return true;
+  }
+
+  /** Withdraw a service entirely. The stops stay; the line stops running. */
+  withdrawLine(id: LineId): boolean {
+    const line = this.lines[id];
+    if (!line || !this.lineIsAlive(line)) return false;
+    this.removeLine(id);
+    return true;
+  }
+
+  /**
+   * Replace the stops a line calls at, keeping the line itself.
+   *
+   * The vehicles are kept and simply put back at the start of the new route:
+   * a service being re-routed is still that service, and making the player
+   * withdraw it and open a replacement would throw away its name, its colour
+   * and every ridership figure the panel has accumulated for it.
+   */
+  reshapeLine(
+    id: LineId,
+    stations: BuildingId[],
+    route: TileIndex[],
+    stopAt: number[],
+  ): boolean {
+    const line = this.lines[id];
+    if (!line || route.length < 2 || stopAt.length < 2) return false;
+
+    line.stations = stations.slice();
+    line.route = route.slice();
+    line.stopAt = stopAt.slice();
+    line.stopStation = stopAt.map((_, i) => stationForStop(line.stations, i));
+
+    const count = Math.max(1, line.vehicles.length);
+    const vehicles = line.vehicles.slice();
+    line.vehicles = [];
+    for (const vid of vehicles) this.retireVehicle(line, vid);
+    if (line.mode === LineMode.Rail) this.addTrains(line, count);
+    else this.addBuses(line, count);
+    // Every train wants a position on a route it has never seen before.
+    for (const vid of line.vehicles) {
+      if (line.mode !== LineMode.Rail) continue;
+      const train = this.trains[vid];
+      if (!train) continue;
+      setTrainPosition(line, train);
+      train.prevX = train.x;
+      train.prevY = train.y;
+    }
+    this.revision++;
+    return true;
+  }
+
+  /** The vehicle working a line, whichever array its mode keeps them in. */
+  vehicleOn(line: TransitLine, vid: number): Train | Bus | undefined {
+    return line.mode === LineMode.Rail ? this.trains[vid] : this.buses[vid - BUS_ID_BASE];
+  }
+
+  /**
+   * Take one vehicle out of service: passengers back on the pavement, and the
+   * slot handed back so the next line can have it.
+   *
+   * The single place a vehicle stops running, so withdrawing a line, dropping
+   * a train and re-routing a service cannot disagree about what that means --
+   * and in particular cannot leave a train still calling at stops on a line
+   * that no longer lists it.
+   */
+  private retireVehicle(line: TransitLine, vid: number): void {
+    const vehicle = this.vehicleOn(line, vid);
+    if (!vehicle) return;
+    for (const cid of vehicle.passengers) {
+      const c = this.citizens[cid];
+      if (c) c.path = null;
+    }
+    vehicle.passengers = [];
+    vehicle.v = 0;
+    if (line.mode === LineMode.Road) {
+      const bus = vehicle as Bus;
+      bus.line = -1;
+      bus.path = null;
+    } else {
+      (vehicle as Train).line = -1;
+    }
+  }
+
+  /** Where a new train would do the most good: the middle of the widest gap. */
+  private largestGap(line: TransitLine): number {
+    const lap = line.route.length - 1;
+    const positions = line.vehicles
+      .map((vid) => this.trains[vid]?.s ?? 0)
+      .sort((a, b) => a - b);
+    if (positions.length === 0) return 0;
+
+    let bestAt = 0;
+    let best = -1;
+    for (let i = 0; i < positions.length; i++) {
+      const from = positions[i];
+      const to = i + 1 < positions.length ? positions[i + 1] : positions[0] + lap;
+      const gap = to - from;
+      if (gap > best) {
+        best = gap;
+        bestAt = (from + gap / 2) % lap;
+      }
+    }
+    return bestAt;
+  }
+
+  /** The stop with the fewest buses on their way to it. */
+  private emptiestStop(line: TransitLine): number {
+    const heading = new Array<number>(line.stopAt.length).fill(0);
+    for (const vid of line.vehicles) {
+      const bus = this.buses[vid - BUS_ID_BASE];
+      if (bus && bus.nextStop < heading.length) heading[bus.nextStop]++;
+    }
+    let bestAt = 0;
+    for (let i = 1; i < heading.length; i++) {
+      if (heading[i] < heading[bestAt]) bestAt = i;
+    }
+    return bestAt;
+  }
+
   /** Lines are tombstoned the same way buildings are: emptied, not spliced. */
   private removeLine(id: LineId): void {
     const line = this.lines[id];
     if (!line || line.route.length === 0) return;
 
-    for (const vid of line.vehicles) {
-      const vehicle = line.mode === LineMode.Rail
-        ? this.trains[vid]
-        : this.buses[vid - BUS_ID_BASE];
-      if (!vehicle) continue;
-      for (const cid of vehicle.passengers) {
-        const c = this.citizens[cid];
-        // Put riders back on the pavement; they will re-plan from there.
-        if (c) c.path = null;
-      }
-      vehicle.passengers = [];
-      // A bus with no line is a free slot; a train belongs to its line and
-      // simply stops existing with it.
-      if (line.mode === LineMode.Road) {
-        const bus = vehicle as Bus;
-        bus.line = -1;
-        bus.path = null;
-        bus.v = 0;
-      }
-    }
+    // Riders go back on the pavement and every vehicle is taken out of
+    // service, through the same helper the frequency controls use.
+    for (const vid of line.vehicles) this.retireVehicle(line, vid);
     line.vehicles = [];
     line.route = [];
     line.stopAt = [];

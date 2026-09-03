@@ -15,6 +15,7 @@ import { Industry } from '../core/types';
 import { workforceEducation } from './education';
 import { industryOf, isWorkplace, specFor } from '../world/buildings';
 import type { World } from '../world/world';
+import type { Policies } from './policies';
 
 /** What the player can be charged for. */
 export const enum Expense {
@@ -28,6 +29,10 @@ export const enum Expense {
   School = 'school',
   FireStation = 'fireStation',
   PoliceStation = 'policeStation',
+  Hospital = 'hospital',
+  Park = 'park',
+  Stadium = 'stadium',
+  AmusementPark = 'amusementPark',
   ElevatedRoad = 'elevatedRoad',
   ElevatedRail = 'elevatedRail',
 }
@@ -48,6 +53,8 @@ export interface Ledger {
   officeTax: number;
   upkeep: number;
   interest: number;
+  /** What the city's by-laws cost yesterday, all of them together. */
+  ordinances: number;
 }
 
 export interface DayResult {
@@ -87,6 +94,7 @@ export class Economy {
     officeTax: 0,
     upkeep: 0,
     interest: 0,
+    ordinances: 0,
   };
 
   /** Total spent on construction since the city was founded. */
@@ -138,14 +146,15 @@ export class Economy {
    * nothing, which is what makes a broken supply chain show up as a hole in
    * the budget rather than only as a number in an industry panel.
    */
-  settleDay(world: World): DayResult {
-    const book = {
+  settleDay(world: World, policies?: Policies, ridersYesterday = 0): DayResult {
+    const book: Ledger = {
       residentialTax: 0,
       commercialTax: 0,
       industrialTax: 0,
       officeTax: 0,
       upkeep: 0,
       interest: 0,
+      ordinances: 0,
     };
 
     for (const b of world.buildings) {
@@ -193,11 +202,16 @@ export class Economy {
       + (world.countTiles(world.map.roadRaise) + world.countTiles(world.map.railRaise))
         * UPKEEP_PER_RAISED_TILE;
 
+    // The by-laws are billed like upkeep rather than refused like
+    // construction: a city that cannot afford its own ordinances goes
+    // overdrawn, which is the pressure that makes keeping one a decision.
+    book.ordinances = policies ? policies.settleDay(world, ridersYesterday) : 0;
+
     book.interest = this.debt * DEBT_INTEREST_PER_DAY
       + (this.balance < 0 ? -this.balance * OVERDRAFT_INTEREST_PER_DAY : 0);
 
     const income = book.residentialTax + book.commercialTax + book.industrialTax + book.officeTax;
-    const expenses = book.upkeep + book.interest;
+    const expenses = book.upkeep + book.interest + book.ordinances;
     this.balance += income - expenses;
 
     this.breakdown = book;

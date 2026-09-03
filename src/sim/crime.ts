@@ -13,6 +13,7 @@ import { BuildingType, Industry, type TileIndex } from '../core/types';
 import { industryOf, isHome, isServing } from '../world/buildings';
 import type { World } from '../world/world';
 import type { LandValueField } from './landValue';
+import type { Policies } from './policies';
 
 /**
  * How unsafe each tile feels, 0 (nothing ever happens here) to 100.
@@ -35,7 +36,11 @@ const PRESSURE_SPREAD = 3;
 export class CrimeField {
   private readonly level = new Float32Array(MAP_SIZE * MAP_SIZE);
 
-  update(world: World, landValue: LandValueField): void {
+  update(world: World, landValue: LandValueField, policies?: Policies): void {
+    // Night patrols are extra relief around the stations the city already
+    // has, rather than relief of their own: an ordinance cannot police a
+    // district with no police station in it.
+    const relief = POLICE_RELIEF + (policies?.patrolRelief ?? 0);
     const incoming = new Float32Array(MAP_SIZE * MAP_SIZE);
 
     for (const b of world.buildings) {
@@ -50,7 +55,7 @@ export class CrimeField {
 
     for (const b of world.buildings) {
       if (b.type !== BuildingType.PoliceStation || !isServing(b)) continue;
-      splat(incoming, b.tile, -POLICE_RELIEF, POLICE_REACH);
+      splat(incoming, b.tile, -relief, POLICE_REACH);
     }
 
     for (let tile = 0; tile < this.level.length; tile++) {

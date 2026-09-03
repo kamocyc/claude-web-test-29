@@ -1,4 +1,9 @@
-import { FIRE_REACH_TILES, MAP_SIZE, SCHOOL_REACH_TILES } from '../config';
+import {
+  FIRE_REACH_TILES,
+  HOSPITAL_REACH_TILES,
+  MAP_SIZE,
+  SCHOOL_REACH_TILES,
+} from '../config';
 import { neighbors } from '../core/grid';
 import { BuildingType, type TileIndex } from '../core/types';
 import { isHome, isServing, type Building } from '../world/buildings';
@@ -8,28 +13,43 @@ import type { World } from '../world/world';
 export const enum Service {
   School = 0,
   Fire = 1,
+  /** A hospital: the same question -- can it be got to along a road? */
+  Health = 2,
 }
+
+/** The three catchment services, for anything that loops over them. */
+export const REACH_SERVICES: readonly Service[] = [
+  Service.School,
+  Service.Fire,
+  Service.Health,
+];
 
 const REACH: Record<Service, number> = {
   [Service.School]: SCHOOL_REACH_TILES,
   [Service.Fire]: FIRE_REACH_TILES,
+  [Service.Health]: HOSPITAL_REACH_TILES,
 };
 
 const STATIONS: Record<Service, BuildingType> = {
   [Service.School]: BuildingType.School,
   [Service.Fire]: BuildingType.FireStation,
+  [Service.Health]: BuildingType.Hospital,
 };
 
 export interface ServicesReport {
   schools: number;
   fireStations: number;
   policeStations: number;
+  hospitals: number;
   /** Homes within reach of each service, and how many there are in total. */
   homes: number;
   schooled: number;
   fireCovered: number;
+  healthCovered: number;
   /** Mean education of the population, 0..100. */
   education: number;
+  /** Mean health of the population, 0..100. */
+  health: number;
 }
 
 /**
@@ -41,6 +61,10 @@ export interface ServicesReport {
  * builds a bridge, and a fire station three tiles away across the water is a
  * fire station that will watch the building burn.
  *
+ * The hospital joined the two of them rather than becoming a fourth kind of
+ * thing, because the question it answers is the same one: can it be got to?
+ * What differs is what being covered *does* -- see `health.ts`.
+ *
  * Police are deliberately *not* here. Policing is not a catchment -- it is how
  * safe a neighbourhood feels, which is a field that spreads and fades (see
  * `crime.ts`). Modelling all three the same way would have been simpler and
@@ -51,13 +75,13 @@ export class Services {
   private readonly reach: Record<Service, Uint8Array> = {
     [Service.School]: new Uint8Array(MAP_SIZE * MAP_SIZE),
     [Service.Fire]: new Uint8Array(MAP_SIZE * MAP_SIZE),
+    [Service.Health]: new Uint8Array(MAP_SIZE * MAP_SIZE),
   };
 
   report: ServicesReport = emptyReport();
 
   update(world: World): void {
-    this.flood(world, Service.School);
-    this.flood(world, Service.Fire);
+    for (const service of REACH_SERVICES) this.flood(world, service);
     this.publish(world);
   }
 
@@ -116,32 +140,44 @@ export class Services {
     let schools = 0;
     let fireStations = 0;
     let policeStations = 0;
+    let hospitals = 0;
     let homes = 0;
     let schooled = 0;
     let fireCovered = 0;
+    let healthCovered = 0;
 
     for (const b of world.buildings) {
       if (!b.alive) continue;
       if (b.type === BuildingType.School) schools++;
       else if (b.type === BuildingType.FireStation) fireStations++;
       else if (b.type === BuildingType.PoliceStation) policeStations++;
+      else if (b.type === BuildingType.Hospital) hospitals++;
       if (!isHome(b.type)) continue;
       homes++;
       if (this.serves(Service.School, b)) schooled++;
       if (this.serves(Service.Fire, b)) fireCovered++;
+      if (this.serves(Service.Health, b)) healthCovered++;
     }
 
     let education = 0;
-    for (const c of world.citizens) education += c.education;
+    let health = 0;
+    for (const c of world.citizens) {
+      education += c.education;
+      health += c.health;
+    }
+    const people = Math.max(1, world.citizens.length);
 
     this.report = {
       schools,
       fireStations,
       policeStations,
+      hospitals,
       homes,
       schooled,
       fireCovered,
-      education: world.citizens.length === 0 ? 0 : education / world.citizens.length,
+      healthCovered,
+      education: world.citizens.length === 0 ? 0 : education / people,
+      health: world.citizens.length === 0 ? 0 : health / people,
     };
   }
 }
@@ -151,9 +187,12 @@ function emptyReport(): ServicesReport {
     schools: 0,
     fireStations: 0,
     policeStations: 0,
+    hospitals: 0,
     homes: 0,
     schooled: 0,
     fireCovered: 0,
+    healthCovered: 0,
     education: 0,
+    health: 0,
   };
 }

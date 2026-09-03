@@ -1,12 +1,26 @@
-import { CAR_FREE_SPEED, LORRY_CAPACITY, MAX_TERRAIN_HEIGHT, TRAIN_CAPACITY } from '../config';
+import {
+  CAR_FREE_SPEED,
+  LEISURE_VISITS_PER_CAPACITY,
+  LORRY_CAPACITY,
+  MAX_TERRAIN_HEIGHT,
+  TRAIN_CAPACITY,
+} from '../config';
 import { ticksToMinutes } from '../core/clock';
 import { tileX, tileY } from '../core/grid';
-import { BuildingType, CitizenState, TravelMode } from '../core/types';
+import { BuildingType, CitizenState, isTravelling, TravelMode } from '../core/types';
 import type { Citizen } from '../sim/citizen';
 import { CargoKind, LorryState, type Lorry } from '../sim/lorry';
-import { departForHomeMinute, departForWorkMinute } from '../sim/schedule';
+import { departForHomeMinute, departForWorkMinute, isRestDay, restDay } from '../sim/schedule';
 import type { Simulation } from '../sim/simulation';
-import { industryOf, isHome, specFor, type Building } from '../world/buildings';
+import {
+  industryOf,
+  isHome,
+  isLeisure,
+  leisureCapacity,
+  specFor,
+  type Building,
+} from '../world/buildings';
+import { drawOf } from '../sim/leisure';
 import type { LandValueFactors } from '../sim/landValue';
 import { BUILDING_ISSUES, buildingIssue } from '../sim/diagnostics';
 import { Industry } from '../core/types';
@@ -147,11 +161,16 @@ export class Inspector {
       ['状態', stateLabel(c)],
       ['幸福度', c.happiness < 0 ? '—' : `${Math.round(c.happiness)} / 100${moodNote(c)}`],
       ['学歴', `${Math.round(c.education)} / 100`],
+      ['健康', `${Math.round(c.health)} / 100`],
       ['車', c.hasCar ? 'あり' : 'なし（徒歩か公共交通）'],
       ['自宅', home ? address(home.tile) : '—'],
       ['職場', work ? address(work.tile) : '未就業'],
       ['出勤', formatMinute(departForWorkMinute(c.seed))],
       ['退勤', formatMinute(departForHomeMinute(c.seed))],
+      // The rest day is why somebody is at home on a weekday afternoon, so
+      // the panel says which day it is rather than leaving it a mystery.
+      ['休み', `${DAY_NAMES[restDay(c.seed)]}曜${
+        isRestDay(c.seed, sim.clock.day) ? '（今日）' : ''}`],
     ];
 
     if (c.mode === TravelMode.Transit && c.ride) {
@@ -176,7 +195,7 @@ export class Inspector {
       }
     }
 
-    if (c.path && (c.state === CitizenState.ToWork || c.state === CitizenState.ToHome)) {
+    if (c.path && isTravelling(c.state)) {
       const target = world.buildings[c.destination];
       const remaining = c.path.length - 1 - c.s;
       const arrival = sim.estimateArrivalMinute(c);
@@ -215,8 +234,10 @@ export class Inspector {
         ['電気', home.powered ? '来ている' : '来ていない'],
         ['学校', sim.services.serves(Service.School, home) ? '通える' : '通えない'],
         ['消防', sim.services.serves(Service.Fire, home) ? '間に合う' : '届かない'],
+        ['病院', sim.services.serves(Service.Health, home) ? 'かかれる' : '届かない'],
         ['標高', heightLabel(sim, home.tile)],
         ['食料の備え', `${c.pantry.toFixed(1)} 日分${c.lastShopFailed ? '（前回買えず）' : ''}`],
+        ['余暇の充実', `${c.leisure.toFixed(1)} 日分${c.lastOutingFailed ? '（前回入れず）' : ''}`],
       ]));
       this.appendLandValue(sim, home.tile);
     }
@@ -231,7 +252,7 @@ export class Inspector {
    * "駅が近い、でも工場の騒音で目減りしている", which is something to act on.
    */
   private appendLandValue(sim: Simulation, tile: number): void {
-    const f = sim.landValue.factorsAt(sim.world, sim.noise, sim.crime, tile);
+    const f = sim.landValue.factorsAt(sim.world, sim.noise, sim.crime, tile, sim.policies);
     this.body.append(
       ...subheading(
         `地価 ${Math.round(f.current)} / 100 の内訳`,
@@ -315,6 +336,14 @@ export class Inspector {
     } else if (b.type === BuildingType.PoliceStation) {
       rows.push(['付近の治安', `${Math.round(100 - sim.crime.at(b.tile))} / 100`]);
       rows.push(['出動中', `${busyUnits(sim, b.id)} 台 / ${unitsOf(sim, b.id)} 台`]);
+    } else if (b.type === BuildingType.Hospital) {
+      rows.push(['市内でかかれる住宅', `${sim.services.report.healthCovered} 軒`]);
+      rows.push(['市内の平均健康', `${Math.round(sim.services.report.health)} / 100`]);
+    } else if (isLeisure(b.type)) {
+      const capacity = leisureCapacity(b.type) * LEISURE_VISITS_PER_CAPACITY;
+      rows.push(['本日の来場', `${b.visitsToday} / ${capacity} 人`]);
+      rows.push(['集客力', `${drawOf(b, sim.policies).toFixed(1)} 倍`]);
+      if (b.visitsToday >= capacity) rows.push(['状況', '⚠ 満員（今日はもう入れません）']);
     }
 
     const industry = industryOf(b.type);
@@ -438,6 +467,10 @@ const BUILDING_LABELS: Record<BuildingType, string> = {
   [BuildingType.Mine]: '鉱山',
   [BuildingType.Station]: '駅',
   [BuildingType.PowerPlant]: '発電所',
+  [BuildingType.Hospital]: '病院',
+  [BuildingType.Park]: '公園',
+  [BuildingType.Stadium]: '競技場',
+  [BuildingType.AmusementPark]: '遊園地',
 };
 
 const LORRY_STATE_LABELS: Record<LorryState, string> = {
@@ -486,10 +519,17 @@ function stateLabel(c: Citizen): string {
       return '買い物へ向かっている';
     case CitizenState.AtShop:
       return '買い物中';
+    case CitizenState.ToLeisure:
+      return 'おでかけ中（施設へ）';
+    case CitizenState.AtLeisure:
+      return 'レジャー中';
     case CitizenState.Stranded:
       return '⚠ 経路なし（道路が繋がっていません）';
   }
 }
+
+/** Day names for the rest day, so a seed's number reads as a day. */
+const DAY_NAMES = ['月', '火', '水', '木', '金', '土', '日'] as const;
 
 function speedNote(ratio: number, blockedTicks: number): string {
   if (blockedTicks > 30) return '（渋滞で停止中）';
@@ -529,7 +569,9 @@ const LAND_VALUE_TERMS: ReadonlyArray<[keyof LandValueFactors, string]> = [
   ['station', '駅が近い'],
   ['shops', '商店が近い'],
   ['offices', 'オフィスが近い'],
+  ['parks', '公園・レジャー'],
   ['noise', '騒音'],
+  ['crime', '治安'],
 ];
 
 /** Amenities are shown as what they add or take away, not as a total. */

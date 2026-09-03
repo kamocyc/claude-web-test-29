@@ -424,6 +424,15 @@ export const BUILD_COSTS = {
   school: 30_000,
   fireStation: 26_000,
   policeStation: 24_000,
+  hospital: 34_000,
+  // Leisure is priced by how far people will travel for it. A park is the
+  // cheapest civic building in the game on purpose -- it is the one answer to
+  // a miserable district that a broke city can still afford -- and the
+  // fairground costs more than a power station, because it draws the whole
+  // city across town and has to be a decision.
+  park: 3_500,
+  stadium: 45_000,
+  amusementPark: 90_000,
   // A viaduct is the expensive answer to a cheap problem, and it has to be:
   // at fifteen times a road tile, taking a road over the railway is a
   // deliberate purchase rather than something to do everywhere.
@@ -494,6 +503,86 @@ export const SHOPPING_DWELL_TICKS = 60;
 /** How long somebody gives up for after finding the shelves bare: 3 hours. */
 export const SHOPPING_RETRY_TICKS = 1200;
 
+// --- Leisure ---------------------------------------------------------------
+// Where people go when they are neither at work nor at the shops.
+//
+// Modelled as a second appetite alongside the pantry, and for the same reason:
+// "the city has three parks" is a number in a report, while "this household
+// has not been anywhere in four days" is somebody who gets in the car on
+// Sunday afternoon. Recreation is therefore a stock that drains and is
+// refilled by an actual trip, which is what puts leisure traffic on the roads
+// at a different hour from the commute.
+
+/** Days of recreation a full outing is worth, and what everyone starts with. */
+export const LEISURE_VISIT = 3;
+export const STARTING_LEISURE = 1.5;
+
+/** Below this many days in hand, an outing is worth making. */
+export const LEISURE_TRIGGER = 1.0;
+
+/** How fast the stock drains. A full visit lasts about three sim days. */
+export const LEISURE_DRAIN_PER_HOUR = 1 / 24;
+
+/**
+ * How far somebody will look for somewhere to go, and how many candidates
+ * they actually weigh up.
+ *
+ * Wider than the shopping radius: the whole point of a stadium is that it is
+ * worth crossing town for, and a search that stopped at the next district
+ * would make the expensive venues indistinguishable from a pocket park.
+ */
+export const LEISURE_SEARCH_RADIUS = 70;
+export const LEISURE_CANDIDATES = 8;
+
+/**
+ * What one tile of distance is worth against a venue's draw.
+ *
+ * The choice is `draw / (1 + distance / LEISURE_DISTANCE_BIAS)`, so at the
+ * bias distance a venue has to be twice as good to be worth the extra
+ * journey. Twenty tiles is about a district: near enough that the local park
+ * wins for a quick outing, far enough that the fairground still pulls people
+ * from across the river.
+ */
+export const LEISURE_DISTANCE_BIAS = 20;
+
+/** How long a visit lasts before setting off home. */
+export const LEISURE_DWELL_TICKS = 220;
+
+/** After a wasted trip, how long before trying again. */
+export const LEISURE_RETRY_TICKS = 1400;
+
+/** When people prefer to go out, and how widely that is spread. */
+export const LEISURE_MINUTE = 14 * 60;
+export const LEISURE_JITTER_MINUTES = 180;
+export const LEISURE_WINDOW_MINUTES = 240;
+
+/** Venues are open during the day only; nobody sets off for a closed park. */
+export const LEISURE_OPEN_MINUTE = 8 * 60;
+export const LEISURE_CLOSE_MINUTE = 20 * 60;
+
+/**
+ * How much of a venue's capacity one visitor takes, and how crowded it may
+ * get before it stops being worth visiting.
+ *
+ * A venue is not consumed the way a shop's stock is -- a park does not run out
+ * of park -- but a fairground with the whole city inside it is not a day out
+ * either. Crowding is measured against the daily visit count so that a single
+ * stadium cannot serve a city of two thousand on its own.
+ */
+export const LEISURE_VISITS_PER_CAPACITY = 6;
+
+/**
+ * Each citizen takes one day off a week, decided by their seed.
+ *
+ * Staggered rather than a shared weekend, and that is a deliberate trade. A
+ * city-wide Saturday would empty every workplace on the same day and make the
+ * economy lurch in a seven-day cycle that says nothing about how the city is
+ * built; a seventh of the population resting on any given day gives the same
+ * thing worth having -- daytime leisure trips, a different traffic pattern --
+ * with the city still running.
+ */
+export const REST_DAYS_PER_WEEK = 7;
+
 // --- Noise, land value, happiness -------------------------------------------
 
 /**
@@ -506,6 +595,20 @@ export const SHOPPING_RETRY_TICKS = 1200;
  * useless as a thing to design around.
  */
 export const TRAFFIC_NOISE_PER_CAR = 13;
+
+/**
+ * What a park is worth to the ground around it, and how far that carries.
+ *
+ * Deliberately the strongest per-tile amenity in the game, over a small
+ * radius. That shape is the decision the tool is for: a park cannot rescue a
+ * district, but it can rescue a block -- so parks get placed *between* the
+ * housing and whatever is spoiling it, rather than sprinkled at random.
+ */
+export const PARK_AMENITY = 16;
+export const PARK_REACH = 7;
+/** The big venues are amenities too, over a wider area and worth less a tile. */
+export const VENUE_AMENITY = 10;
+export const VENUE_REACH = 12;
 
 /** How fast the noise field follows what is happening now. */
 export const NOISE_SMOOTHING = 0.35;
@@ -599,6 +702,16 @@ export const BUS_STOP_WALK_RADIUS = 7;
  */
 export const SCHOOL_REACH_TILES = 24;
 export const FIRE_REACH_TILES = 34;
+/**
+ * A hospital reaches further than a school and less far than a fire brigade.
+ *
+ * It is the same road flood as the other two, and the number says what the
+ * building is: people will travel further to a hospital than children walk to
+ * school, but a district it cannot reach along a road is a district whose
+ * ambulances do not arrive -- which is the fire brigade's problem, and is why
+ * it does not out-reach it.
+ */
+export const HOSPITAL_REACH_TILES = 28;
 
 /** Civic coverage is re-solved on the same cadence as the power grid. */
 export const SERVICES_INTERVAL_MINUTES = 30;
@@ -617,6 +730,32 @@ export const STARTING_EDUCATION = 20;
 export const EDUCATION_PER_HOUR = 0.8;
 /** Wages at full education, as a multiple of the untaught rate. */
 export const EDUCATION_WAGE_BONUS = 0.5;
+
+// --- Health ----------------------------------------------------------------
+// Health is education's opposite number and is deliberately *not* modelled the
+// same way. Education only ever goes up -- what you were taught you keep --
+// while health is a running balance between where somebody lives and whether a
+// hospital can reach them. That asymmetry is the point: a school built once
+// keeps paying, a hospital has to keep being reachable.
+
+export const STARTING_HEALTH = 70;
+
+/** Where health settles with a hospital in reach, and without one. */
+export const HEALTH_WITH_HOSPITAL = 92;
+export const HEALTH_WITHOUT_HOSPITAL = 58;
+
+/**
+ * What a fully noisy, fully unsafe neighbourhood takes off that target.
+ *
+ * Noise stands in for the whole environment here -- the arterial road, the
+ * factory next door -- because it is the field the player already understands
+ * and already acts on.
+ */
+export const HEALTH_NOISE_PENALTY = 22;
+export const HEALTH_CRIME_PENALTY = 10;
+
+/** How fast health moves towards its target, per sim hour. */
+export const HEALTH_RECOVERY = 0.18;
 
 // --- Crime -----------------------------------------------------------------
 // Crime is a field like noise: a property of a neighbourhood rather than of a
@@ -704,6 +843,39 @@ export const EMERGENCY_INTERVAL_MINUTES = 30;
 
 /** How long a unit with no route waits before trying again. */
 export const EMERGENCY_RETRY_TICKS = 200;
+
+// --- Ordinances ------------------------------------------------------------
+// A handful of city-wide policies the player switches on and pays for daily.
+//
+// Every one of them is a *multiplier on a system that already exists* rather
+// than a new mechanism: the fare subsidy moves the number the mode choice is
+// already compared against, the energy by-law scales the draw the grid already
+// sums, the patrols add to the relief a police station already spreads, and
+// the greening by-law scales the amenity a park already emits. An ordinance
+// that needed its own subsystem would be a second, invisible game running
+// beside the visible one.
+
+/** How much more willing a subsidised rider is to leave the car at home. */
+export const ORDINANCE_TRANSIT_PREFERENCE = 1.25;
+/** Paid per rider carried yesterday: a subsidy costs what it is used for. */
+export const ORDINANCE_TRANSIT_COST_PER_RIDER = 26;
+
+/** What the energy by-law takes off every building's draw, and its daily cost. */
+export const ORDINANCE_ENERGY_SAVING = 0.15;
+export const ORDINANCE_ENERGY_COST_PER_BUILDING = 14;
+
+/** Extra crime relief around every working police station, and its cost. */
+export const ORDINANCE_PATROL_RELIEF = 22;
+export const ORDINANCE_PATROL_COST_PER_RESIDENT = 6;
+
+/** What the greening by-law is worth to a park, and what it costs per park. */
+export const ORDINANCE_GREENING_AMENITY = 1.5;
+export const ORDINANCE_GREENING_DRAW = 1.25;
+export const ORDINANCE_GREENING_COST_PER_PARK = 220;
+
+/** Free clinics: where health settles with one, and the cost per resident. */
+export const ORDINANCE_HEALTH_BONUS = 10;
+export const ORDINANCE_HEALTH_COST_PER_RESIDENT = 8;
 
 // --- Terrain height --------------------------------------------------------
 // The map stops being a sheet of paper here. Every tile has a height in whole

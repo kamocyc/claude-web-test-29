@@ -3,6 +3,7 @@ import { TICKS_PER_DAY } from '../config';
 import { idx } from '../core/grid';
 import { BuildingType, CitizenState, Zone, type BuildingId } from '../core/types';
 import { IncidentKind } from '../sim/emergency';
+import { Ordinance } from '../sim/policies';
 import { Simulation } from '../sim/simulation';
 import { createBusLine, createLine } from '../world/lineBuilder';
 import { deserialize, serialize } from '../world/persistence';
@@ -55,6 +56,9 @@ function town(): World {
   w.placeService(idx(22, y + 1), BuildingType.School);
   w.placeService(idx(24, y + 3), BuildingType.FireStation);
   w.placeService(idx(26, y + 1), BuildingType.PoliceStation);
+  w.placeService(idx(28, y + 1), BuildingType.Hospital);
+  w.placeService(idx(30, y + 1), BuildingType.Park);
+  w.placeService(idx(40, y + 3), BuildingType.Stadium);
 
   powerTown(w);
   return w;
@@ -68,7 +72,8 @@ function run(sim: Simulation, ticks: number): void {
 function fingerprint(sim: Simulation): string {
   const parts: string[] = [String(sim.clock.tick)];
   for (const c of sim.world.citizens) {
-    parts.push(`${c.state}:${c.mode}:${c.x.toFixed(4)}:${c.y.toFixed(4)}:${c.work}`);
+    parts.push(`${c.state}:${c.mode}:${c.x.toFixed(4)}:${c.y.toFixed(4)}:${c.work}`
+      + `:${c.leisure.toFixed(4)}:${c.health.toFixed(4)}`);
   }
   for (const t of sim.world.trains) {
     parts.push(`T${t.s.toFixed(4)}:${t.passengers.length}`);
@@ -219,16 +224,53 @@ describe('save and load', () => {
     expect(restored.world.lines.map((l) => l.mode)).toEqual(sim.world.lines.map((l) => l.mode));
     expect(restored.world.units.length).toBe(sim.world.units.length);
 
+    // Whatever was in flight is still in flight -- the fire that was just
+    // raised, and anything the city had going on of its own.
     const live = restored.emergency.active;
-    expect(live).toHaveLength(1);
-    expect(live[0].building).toBe(burning.id);
-    expect(live[0].deadlineTick).toBe(sim.emergency.active[0].deadlineTick);
+    expect(live.map((i) => [i.building, i.kind, i.deadlineTick]))
+      .toEqual(sim.emergency.active.map((i) => [i.building, i.kind, i.deadlineTick]));
+    const fire = live.find((i) => i.building === burning.id);
+    expect(fire).toBeDefined();
+    expect(fire!.kind).toBe(IncidentKind.Fire);
 
     expect(restored.world.citizens.map((c) => [c.education, c.hasCar]))
       .toEqual(sim.world.citizens.map((c) => [c.education, c.hasCar]));
     for (let tile = 0; tile < 128 * 128; tile += 307) {
       expect(restored.crime.at(tile)).toBeCloseTo(sim.crime.at(tile), 3);
     }
+  });
+
+  it('carries the leisure, the health and the by-laws in force', () => {
+    const sim = new Simulation(town());
+    sim.policies.set(Ordinance.Greening, true);
+    sim.policies.set(Ordinance.TransitSubsidy, true);
+    run(sim, TICKS_PER_DAY * 2);
+
+    const restored = deserialize(JSON.parse(JSON.stringify(serialize(sim))));
+
+    // The ordinances, which are a standing bill rather than a derived fact.
+    expect(restored.policies.enabled).toEqual(sim.policies.enabled);
+    expect(restored.policies.isOn(Ordinance.Greening)).toBe(true);
+    expect(restored.policies.isOn(Ordinance.EnergySaving)).toBe(false);
+    // ...and the counter their fare subsidy is billed against, so a load
+    // cannot hand the city a free day of it.
+    expect(restored.ridershipAtDayStart).toBe(sim.ridershipAtDayStart);
+
+    // Recreation and health are as much part of a household as the pantry.
+    expect(restored.world.citizens.map((c) => [
+      c.leisure.toFixed(4), c.lastOutingFailed, c.nextLeisureTick, c.health.toFixed(4),
+    ])).toEqual(sim.world.citizens.map((c) => [
+      c.leisure.toFixed(4), c.lastOutingFailed, c.nextLeisureTick, c.health.toFixed(4),
+    ]));
+
+    // A venue's crowding counter is today's, and today is not over.
+    expect(restored.world.buildings.map((b) => b.visitsToday))
+      .toEqual(sim.world.buildings.map((b) => b.visitsToday));
+
+    // And the whole city still continues identically from there.
+    run(sim, 1500);
+    run(restored, 1500);
+    expect(fingerprint(restored)).toBe(fingerprint(sim));
   });
 
   it('refuses a save written by a different version', () => {

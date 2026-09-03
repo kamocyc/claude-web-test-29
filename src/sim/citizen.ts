@@ -1,4 +1,11 @@
-import { CAR_OWNERSHIP, MAP_SIZE, STARTING_EDUCATION, STARTING_PANTRY } from '../config';
+import {
+  CAR_OWNERSHIP,
+  MAP_SIZE,
+  STARTING_EDUCATION,
+  STARTING_HEALTH,
+  STARTING_LEISURE,
+  STARTING_PANTRY,
+} from '../config';
 import { hashToUnit, type Rng } from '../core/rng';
 import {
   CitizenState,
@@ -158,6 +165,25 @@ export interface Citizen {
   nextShopTick: number;
   /** Set when the citizen has left the city; the hourly pass then removes them. */
   left: boolean;
+
+  // --- Leisure and health --------------------------------------------------
+
+  /**
+   * Days of recreation in hand. Drains steadily like the pantry and is
+   * refilled by actually going somewhere -- which is what turns "the city has
+   * a park" into "this household went to it on Sunday".
+   */
+  leisure: number;
+  /** True when the last outing found the place full. */
+  lastOutingFailed: boolean;
+  /** The earliest tick this citizen will try to go out again. */
+  nextLeisureTick: number;
+  /**
+   * 0..100. Unlike education this falls as well as rises: it tracks whether a
+   * hospital can reach home and what living there is like, so it is a
+   * commitment the city keeps rather than a lesson somebody keeps.
+   */
+  health: number;
 }
 
 const FAMILY = [
@@ -216,6 +242,10 @@ export function createCitizen(
     lastShopFailed: false,
     nextShopTick: 0,
     left: false,
+    leisure: STARTING_LEISURE,
+    lastOutingFailed: false,
+    nextLeisureTick: 0,
+    health: STARTING_HEALTH,
   };
 }
 

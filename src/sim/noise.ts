@@ -81,6 +81,25 @@ export class NoiseField {
   restore(values: Float32Array): void {
     this.level.set(values.subarray(0, this.level.length));
   }
+
+  /**
+   * The part-finished tally, and how many ticks are in it.
+   *
+   * Saved along with the field because it cannot be recomputed: it is a
+   * measurement of cars that were on the road between the last recompute and
+   * now, and those cars have been and gone. A load that dropped it would run
+   * the next hourly update on a fraction of an hour's traffic, which is a
+   * quieter city than the one that was saved -- and quiet enough, through
+   * land value and health, for the whole city to drift.
+   */
+  snapshotTally(): { traffic: Float32Array; samples: number } {
+    return { traffic: this.traffic.slice(), samples: this.samples };
+  }
+
+  restoreTally(traffic: Float32Array, samples: number): void {
+    this.traffic.set(traffic.subarray(0, this.traffic.length));
+    this.samples = samples;
+  }
 }
 
 /** Add a source, falling off linearly with distance. */

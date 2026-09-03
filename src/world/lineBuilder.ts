@@ -351,3 +351,55 @@ function reconstructRoute(cameFrom: Map<number, number>, end: number): TileIndex
   tiles.reverse();
   return tiles;
 }
+
+/**
+ * Re-route an existing service through a new list of stops.
+ *
+ * The same two operations `createBusLine` and `createLineThrough` perform --
+ * lay whatever track is missing, work out the round trip -- applied to a line
+ * that already exists. Nothing is changed unless the new shape actually works:
+ * a rail reshape that cannot be joined up puts back every tile it laid, and a
+ * bus reshape whose stops are not connected by road simply refuses, so a
+ * player who tries an impossible route still has the service they had before.
+ */
+export function reshapeLineThrough(
+  world: World,
+  lineId: number,
+  stations: BuildingId[],
+): LineResult {
+  const line = world.lines[lineId];
+  if (!line || !world.lineIsAlive(line) || stations.length < 2) {
+    return { line: null, builtTrack: false };
+  }
+
+  if (line.mode === LineMode.Road) {
+    const layout = layoutRoadRoute(world, stations);
+    if (!layout) return { line: null, builtTrack: false };
+    world.reshapeLine(lineId, stations, layout.route, layout.stopAt);
+    return { line, builtTrack: false };
+  }
+
+  const laid: TileIndex[] = [];
+  const platforms = new Map<BuildingId, TileIndex>();
+  const rollback = (): LineResult => {
+    for (let i = laid.length - 1; i >= 0; i--) world.removeRail(laid[i]);
+    for (const [id, before] of platforms) world.buildings[id].platform = before;
+    return { line: null, builtTrack: false };
+  };
+
+  for (const id of stations) {
+    const station = world.buildings[id];
+    if (station) platforms.set(id, station.platform);
+    if (!ensurePlatform(world, id, laid)) return rollback();
+  }
+  if (!connectStations(world, stations, laid)) return rollback();
+
+  const layout = layoutRoute(world, stations);
+  if (!layout) return rollback();
+  // Taking track up to lay the new alignment can cut *this* line's own stored
+  // route, and `removeRail` withdraws any line whose route it breaks -- so the
+  // reshape has to be applied to a line that is still alive.
+  if (!world.lineIsAlive(line)) return rollback();
+  world.reshapeLine(lineId, stations, layout.route, layout.stopAt);
+  return { line, builtTrack: laid.length > 0 };
+}

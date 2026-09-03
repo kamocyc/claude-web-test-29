@@ -1,6 +1,12 @@
 import {
   CAR_FREE_SPEED,
   CHAIN_INTERVAL_MINUTES,
+  LEISURE_CLOSE_MINUTE,
+  LEISURE_DWELL_TICKS,
+  LEISURE_OPEN_MINUTE,
+  LEISURE_RETRY_TICKS,
+  LEISURE_TRIGGER,
+  LEISURE_WINDOW_MINUTES,
   EMERGENCY_INTERVAL_MINUTES,
   FIELD_INTERVAL_MINUTES,
   FREIGHT_INTERVAL_MINUTES,
@@ -53,9 +59,14 @@ import {
   departForHomeMinute,
   departForWorkMinute,
   inDepartureWindow,
+  isRestDay,
+  leisureMinute,
   shoppingMinute,
 } from './schedule';
 import { buy, chooseShop } from './shopping';
+import { chooseVenue, drainLeisure, endLeisureDay, visit } from './leisure';
+import { treat } from './health';
+import { Policies } from './policies';
 import { findPath, PathCache } from './pathfinding';
 import { carryPassengers } from './boarding';
 import { advanceTrain } from './trains';
@@ -85,8 +96,19 @@ export class Simulation {
   readonly services = new Services();
   readonly crime = new CrimeField();
   readonly emergency = new Emergency();
+  readonly policies = new Policies();
 
   strandedCount = 0;
+
+  /**
+   * Total rides completed as of the last time the books closed.
+   *
+   * The fare subsidy is billed per rider carried, and `line.ridership` is a
+   * running total rather than a daily one -- so yesterday's traffic is the
+   * difference between two of these, which is also the only figure that stays
+   * right when a line is opened or withdrawn mid-day.
+   */
+  ridershipAtDayStart = 0;
 
   private pathQueue: Citizen[] = [];
 
@@ -106,7 +128,9 @@ export class Simulation {
   lastEmergencyBucket = -1;
   lastSettledDay = -1;
 
-  constructor(readonly world: World) {}
+  constructor(readonly world: World) {
+    this.ridershipAtDayStart = totalRidership(world);
+  }
 
   tick(): void {
     this.clock.step();
@@ -139,12 +163,19 @@ export class Simulation {
 
       switch (c.state) {
         case CitizenState.AtHome:
+          // Nobody goes to work on their own day off. Rest days are staggered
+          // across the week by seed, so a seventh of the city is at home on
+          // any given day rather than all of it on the same one.
           if (c.work >= 0
+            && !isRestDay(c.seed, this.clock.day)
             && inDepartureWindow(minute, departForWorkMinute(c.seed), DEPARTURE_WINDOW_MINUTES)) {
             this.beginTrip(c, CitizenState.ToWork, c.home, c.work);
             break;
           }
-          this.maybeGoShopping(c, minute);
+          // The cupboard comes before the day out: an empty fridge is a need
+          // and an afternoon in the park is not.
+          if (this.maybeGoShopping(c, minute)) break;
+          this.maybeGoOut(c, minute);
           break;
         case CitizenState.AtWork:
           if (inDepartureWindow(minute, departForHomeMinute(c.seed), DEPARTURE_WINDOW_MINUTES)) {
@@ -152,6 +183,7 @@ export class Simulation {
           }
           break;
         case CitizenState.AtShop:
+        case CitizenState.AtLeisure:
           if (this.clock.tick >= c.retryAtTick) {
             this.beginTrip(c, CitizenState.ToHome, c.destination, c.home);
           }
@@ -174,20 +206,50 @@ export class Simulation {
    * Unlike the commute this applies to everybody, jobless included -- which is
    * also the first time the unemployed have had any reason to leave the house.
    */
-  private maybeGoShopping(c: Citizen, minute: number): void {
-    if (c.pantry > SHOPPING_TRIGGER) return;
-    if (this.clock.tick < c.nextShopTick) return;
+  private maybeGoShopping(c: Citizen, minute: number): boolean {
+    if (c.pantry > SHOPPING_TRIGGER) return false;
+    if (this.clock.tick < c.nextShopTick) return false;
 
     const preferred = inDepartureWindow(minute, shoppingMinute(c.seed), SHOPPING_WINDOW_MINUTES);
     // An empty cupboard does not wait for tomorrow evening; it goes out
     // whenever the shops are open.
     const desperate = c.pantry <= 0
       && minute >= SHOP_OPEN_MINUTE && minute <= SHOP_CLOSE_MINUTE;
-    if (!preferred && !desperate) return;
+    if (!preferred && !desperate) return false;
 
     const shop = chooseShop(this.world, c);
-    if (shop < 0) return;
+    if (shop < 0) return false;
     this.beginTrip(c, CitizenState.ToShop, c.home, shop);
+    return true;
+  }
+
+  /**
+   * Go out for the afternoon, if there is anywhere worth going.
+   *
+   * The third trip purpose, and the first one that is nobody's obligation:
+   * people go when they have not been anywhere for a few days, when the venues
+   * are open, and when it is their hour for it -- which for most of the city
+   * is the early afternoon, so leisure traffic falls between the two commutes
+   * rather than on top of either. On a rest day the window is the whole
+   * opening day, because somebody who is not at work has no other call on it.
+   */
+  private maybeGoOut(c: Citizen, minute: number): boolean {
+    if (c.leisure > LEISURE_TRIGGER) return false;
+    if (this.clock.tick < c.nextLeisureTick) return false;
+    if (minute < LEISURE_OPEN_MINUTE || minute > LEISURE_CLOSE_MINUTE) return false;
+
+    const resting = isRestDay(c.seed, this.clock.day);
+    const preferred = inDepartureWindow(
+      minute,
+      leisureMinute(c.seed),
+      LEISURE_WINDOW_MINUTES,
+    );
+    if (!preferred && !resting) return false;
+
+    const venue = chooseVenue(this.world, c, this.policies);
+    if (venue < 0) return false;
+    this.beginTrip(c, CitizenState.ToLeisure, c.home, venue);
+    return true;
   }
 
   private beginTrip(
@@ -290,7 +352,7 @@ export class Simulation {
       const plan = planTransit(world, from, to);
       const surfaceTicks = surfaceTravelTicks(this.traffic, surfaceMode, doorToDoor);
 
-      if (plan && transitWins(plan.totalTicks, surfaceTicks)) {
+      if (plan && transitWins(plan.totalTicks, surfaceTicks, this.policies.transitPreference)) {
         c.mode = TravelMode.Transit;
         c.ride = plan.ride;
         c.legAfterRide = plan.fromStation;
@@ -439,6 +501,17 @@ export class Simulation {
       // would otherwise turn back round at the door.
       c.nextShopTick = this.clock.tick + SHOPPING_RETRY_TICKS;
     }
+
+    if (c.state === CitizenState.AtLeisure) {
+      const venue = this.world.buildings[c.destination];
+      if (venue && venue.alive) visit(venue, c, this.policies);
+      else c.lastOutingFailed = true;
+      // An afternoon out, then home -- and a long cooling-off period either
+      // way, so a city with one crowded park does not put its whole
+      // population on the road every hour trying to get into it.
+      c.retryAtTick = this.clock.tick + LEISURE_DWELL_TICKS;
+      c.nextLeisureTick = this.clock.tick + LEISURE_RETRY_TICKS;
+    }
   }
 
   private moveTrains(): void {
@@ -479,7 +552,7 @@ export class Simulation {
     const minute = this.clock.minuteOfDay;
 
     if (this.due('lastPowerBucket', minute, POWER_INTERVAL_MINUTES)) {
-      this.power.update(this.world);
+      this.power.update(this.world, this.policies);
     }
     if (this.due('lastChainBucket', minute, CHAIN_INTERVAL_MINUTES)) {
       this.chain.step(this.world);
@@ -500,9 +573,17 @@ export class Simulation {
       // today's, which is the loop the player plays against: a cheap district
       // gets the crime, and the crime keeps it cheap until a police station
       // breaks the cycle.
-      this.crime.update(this.world, this.landValue);
-      this.landValue.update(this.world, this.noise, this.crime);
+      this.crime.update(this.world, this.landValue, this.policies);
+      this.landValue.update(this.world, this.noise, this.crime, this.policies);
       educate(this.world, this.services);
+      // Health is the hospital's half of the same hour: it reads the very
+      // fields the noise and the crime were just written into, so what the
+      // panel blames a district's health on is what is actually there.
+      treat(this.world, this.services, this.noise, this.crime, this.policies);
+      // A day out keeps for a few days and then wears off, exactly like the
+      // groceries do -- which is what makes leisure a recurring trip rather
+      // than a box the player ticks once.
+      drainLeisure(this.world);
       this.happiness.update(
         this.world,
         this.landValue,
@@ -523,9 +604,16 @@ export class Simulation {
     // The books close once a day, at midnight.
     if (this.clock.day !== this.lastSettledDay) {
       if (this.lastSettledDay >= 0) {
-        this.economy.settleDay(this.world);
+        const total = totalRidership(this.world);
+        this.economy.settleDay(
+          this.world,
+          this.policies,
+          Math.max(0, total - this.ridershipAtDayStart),
+        );
+        this.ridershipAtDayStart = total;
         this.freight.endDay();
         this.emergency.endDay();
+        endLeisureDay(this.world);
       }
       this.lastSettledDay = this.clock.day;
     }
@@ -565,6 +653,13 @@ export class Simulation {
   }
 }
 
+
+/** Rides completed on every line the city has ever opened. */
+function totalRidership(world: World): number {
+  let total = 0;
+  for (const line of world.lines) total += line.ridership;
+  return total;
+}
 
 /**
  * How long the trip takes without transit: the thing a ride has to beat.

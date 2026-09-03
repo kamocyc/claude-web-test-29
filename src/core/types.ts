@@ -55,6 +55,22 @@ export const enum BuildingType {
   School = 12,
   FireStation = 13,
   PoliceStation = 14,
+  /** A clinic with beds: the health half of the civic services. */
+  Hospital = 15,
+  /**
+   * The three places people go when they are not working or shopping.
+   *
+   * They are one family rather than three unrelated buildings: each is
+   * somewhere a citizen makes a trip to in their own time, and they differ
+   * only in how far somebody will go for one (`leisureDraw` in
+   * `buildings.ts`). A park is round the corner and a fairground is worth
+   * crossing the city for, and that difference is the whole design -- it is
+   * what turns leisure into traffic at a different time of day from the
+   * commute.
+   */
+  Park = 16,
+  Stadium = 17,
+  AmusementPark = 18,
 }
 
 /** What a building does in the supply chain. */
@@ -86,6 +102,10 @@ export const enum CitizenState {
   ToShop = 7,
   /** In the shop, filling the basket. */
   AtShop = 8,
+  /** On the way to a park, a stadium or the fairground. */
+  ToLeisure = 9,
+  /** There, spending the afternoon. */
+  AtLeisure = 10,
 }
 
 /**
@@ -101,7 +121,8 @@ export function isAtRest(state: CitizenState): boolean {
   return (
     state === CitizenState.AtHome ||
     state === CitizenState.AtWork ||
-    state === CitizenState.AtShop
+    state === CitizenState.AtShop ||
+    state === CitizenState.AtLeisure
   );
 }
 
@@ -115,7 +136,8 @@ export function isTravelling(state: CitizenState): boolean {
   return (
     state === CitizenState.ToWork ||
     state === CitizenState.ToHome ||
-    state === CitizenState.ToShop
+    state === CitizenState.ToShop ||
+    state === CitizenState.ToLeisure
   );
 }
 
@@ -132,6 +154,8 @@ export function arrivalStateFor(leg: CitizenState): CitizenState {
       return CitizenState.AtWork;
     case CitizenState.ToShop:
       return CitizenState.AtShop;
+    case CitizenState.ToLeisure:
+      return CitizenState.AtLeisure;
     default:
       return CitizenState.AtHome;
   }

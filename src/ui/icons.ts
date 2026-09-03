@@ -52,6 +52,25 @@ const ICONS = {
   policeStation:
     '<path d="M12 3.2 19.5 6v6c0 4-3.2 7.2-7.5 8.8C7.7 19.2 4.5 16 4.5 12V6z"/>'
     + '<path d="M12 8.2 13.2 11h2.9l-2.4 1.9.9 2.9-2.6-1.8-2.6 1.8.9-2.9L7.9 11h2.9z"/>',
+  // A cross on a roof: the one civic building whose symbol is universal.
+  hospital:
+    '<path d="M3.5 20.5h17"/><path d="M5.5 20.5V7.5h13v13"/><path d="M5.5 7.5 12 3.5l6.5 4"/>'
+    + '<path d="M12 10.5v6M9 13.5h6"/>',
+  // A tree over a bench: small, green, somewhere to sit.
+  park:
+    '<path d="M9 11.5a4 4 0 1 1 8 0"/><path d="M13 11.5v4"/>'
+    + '<path d="M3.5 16.5h7M4.5 16.5v4M9.5 16.5v4"/><path d="M3.5 19h7"/>'
+    + '<path d="M11.5 20.5h9"/>',
+  // A bowl with floodlights: a stadium reads as its section, not its plan.
+  stadium:
+    '<path d="M3.5 12.5c0-2.8 3.8-5 8.5-5s8.5 2.2 8.5 5-3.8 5-8.5 5-8.5-2.2-8.5-5z"/>'
+    + '<path d="M8 12.5c0-1.4 1.8-2.5 4-2.5s4 1.1 4 2.5-1.8 2.5-4 2.5-4-1.1-4-2.5z"/>'
+    + '<path d="M5 7.5V4M19 7.5V4"/><path d="M3.5 4h3M17.5 4h3"/>',
+  // A big wheel: nothing else in the toolbar is a circle with spokes.
+  amusementPark:
+    '<circle cx="12" cy="10.5" r="7"/><circle cx="12" cy="10.5" r="1.6"/>'
+    + '<path d="M12 3.5v14M5 10.5h14M7 5.5l10 10M17 5.5l-10 10"/>'
+    + '<path d="M9.5 20.5h5"/>',
   bulldoze:
     '<path d="M4 7h16"/><path d="M9.8 7V4.5h4.4V7"/><path d="M6.6 7l1 13h8.8l1-13"/>',
 
@@ -124,6 +143,18 @@ const ICONS = {
     '<rect x="2.5" y="6.5" width="19" height="11" rx="2"/><circle cx="12" cy="12" r="2.7"/>'
     + '<path d="M6 10v4M18 10v4"/>',
   winStats: '<path d="M3.5 20.5h17"/><path d="M7 20.5V11.5M12 20.5V4.5M17 20.5V8.5"/>',
+  // A route diagram: stops on a line, which is what the window lists.
+  winLines:
+    '<path d="M4 17.5 9 12l5 5 6-9"/><circle cx="4" cy="17.5" r="1.8"/>'
+    + '<circle cx="9" cy="12" r="1.8"/><circle cx="14" cy="17" r="1.8"/>'
+    + '<circle cx="20" cy="8" r="1.8"/>',
+  // A stamped document: a by-law is a piece of paper the city signs.
+  winPolicies:
+    '<path d="M6 3.5h8l4 4v13H6z"/><path d="M14 3.5v4h4"/>'
+    + '<path d="M8.5 12h7M8.5 15h7M8.5 18h4"/>',
+  // A heart in a shield: leisure and health, for the wellbeing window.
+  winLeisure:
+    '<path d="M12 20.5c-4.5-2.6-7.5-5.6-7.5-9A3.9 3.9 0 0 1 12 9.4a3.9 3.9 0 0 1 7.5 2.1c0 3.4-3 6.4-7.5 9z"/>',
   randomCitizen:
     '<circle cx="10" cy="7.6" r="3.6"/><path d="M3.8 20.5a6.2 6.2 0 0 1 12.4 0"/>'
     + '<path d="M16.5 5.5h4v4"/><path d="M20.5 5.5 16.8 9.2"/>',

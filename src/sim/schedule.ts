@@ -1,15 +1,21 @@
 import {
+  LEISURE_JITTER_MINUTES,
+  LEISURE_MINUTE,
+  REST_DAYS_PER_WEEK,
   SCHEDULE_JITTER_MINUTES,
   SHOPPING_JITTER_MINUTES,
   SHOPPING_MINUTE,
   WORK_END_MINUTE,
   WORK_START_MINUTE,
 } from '../config';
+import { hashToUnit } from '../core/rng';
 import { scheduleJitter } from './citizen';
 
 const SALT_MORNING = 0x9e37;
 const SALT_EVENING = 0x85eb;
 const SALT_SHOPPING = 0xc2b2;
+const SALT_LEISURE = 0x27d4;
+const SALT_REST = 0x1656;
 
 /**
  * Departure times are derived from the citizen's seed, not stored and not
@@ -33,6 +39,36 @@ export function departForHomeMinute(seed: number): number {
  */
 export function shoppingMinute(seed: number): number {
   return wrapDay(SHOPPING_MINUTE + scheduleJitter(seed, SALT_SHOPPING) * SHOPPING_JITTER_MINUTES);
+}
+
+/**
+ * When this citizen prefers to go out.
+ *
+ * Early afternoon rather than the evening, so leisure traffic falls between
+ * the two commutes rather than on top of the shopping run -- which is the
+ * point of having a third trip purpose at all: a different hour of the day
+ * with a different pattern on the roads.
+ */
+export function leisureMinute(seed: number): number {
+  return wrapDay(LEISURE_MINUTE + scheduleJitter(seed, SALT_LEISURE) * LEISURE_JITTER_MINUTES);
+}
+
+/**
+ * The day of the week this citizen does not work, derived from their seed.
+ *
+ * Staggered rather than shared, so a seventh of the city is off on any given
+ * day. A common weekend would empty every workplace at once and make the whole
+ * economy lurch in a seven-day cycle that says nothing about how the city was
+ * built; this gives the thing worth having -- somebody at home on a Tuesday
+ * afternoon, going to the park -- without stopping the city.
+ */
+export function restDay(seed: number): number {
+  return Math.floor(hashToUnit(seed, SALT_REST) * REST_DAYS_PER_WEEK) % REST_DAYS_PER_WEEK;
+}
+
+/** True when `day` is this citizen's day off. */
+export function isRestDay(seed: number, day: number): boolean {
+  return day % REST_DAYS_PER_WEEK === restDay(seed);
 }
 
 function wrapDay(m: number): number {

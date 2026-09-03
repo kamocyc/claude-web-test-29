@@ -22,6 +22,13 @@ export const COLORS = {
   school: '#7ec8a9',
   fireStation: '#e05c5c',
   policeStation: '#5b8fd6',
+  hospital: '#e8f0f5',
+  // Leisure keeps one hue family, lightest for the smallest: a player who
+  // learns that green squares are somewhere to go can read a district's
+  // provision without clicking on anything.
+  park: '#5fd18a',
+  stadium: '#2f9e6b',
+  amusementPark: '#c0e04a',
   stationPending: '#ffc94a',
   platform: 'rgba(197, 143, 224, 0.35)',
 

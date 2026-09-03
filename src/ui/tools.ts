@@ -21,6 +21,10 @@ export const enum Tool {
   School = 'school',
   FireStation = 'fireStation',
   PoliceStation = 'policeStation',
+  Hospital = 'hospital',
+  Park = 'park',
+  Stadium = 'stadium',
+  AmusementPark = 'amusementPark',
   Bulldoze = 'bulldoze',
   ResidentialLow = 'residentialLow',
   ResidentialHigh = 'residentialHigh',
@@ -67,6 +71,7 @@ export type ToolGroup =
   | 'bus'
   | 'zone'
   | 'civic'
+  | 'leisure'
   | 'bulldoze';
 
 export interface ToolInfo {
@@ -116,7 +121,9 @@ export const TOOL_LABELS: ReadonlyArray<ToolInfo> = [
     icon: 'zoneFactory', swatch: COLORS.industry,
   },
   {
-    tool: Tool.Office, label: 'オフィス', key: 't', group: 'zone',
+    // Not "t": the overlay shortcuts are read first, so a tool keyed to one of
+    // them can never be reached from the keyboard.
+    tool: Tool.Office, label: 'オフィス', key: 'o', group: 'zone',
     icon: 'zoneOffice', swatch: COLORS.office,
   },
   {
@@ -140,6 +147,14 @@ export const TOOL_LABELS: ReadonlyArray<ToolInfo> = [
   { tool: Tool.School, label: '学校', key: 'g', group: 'civic', icon: 'school' },
   { tool: Tool.FireStation, label: '消防署', key: 'h', group: 'civic', icon: 'fireStation' },
   { tool: Tool.PoliceStation, label: '警察署', key: 'j', group: 'civic', icon: 'policeStation' },
+  { tool: Tool.Hospital, label: '病院', key: 'i', group: 'civic', icon: 'hospital' },
+
+  { tool: Tool.Park, label: '公園', key: 'u', group: 'leisure', icon: 'park' },
+  { tool: Tool.Stadium, label: '競技場', key: 'y', group: 'leisure', icon: 'stadium' },
+  {
+    tool: Tool.AmusementPark, label: '遊園地', key: 'x', group: 'leisure',
+    icon: 'amusementPark',
+  },
 
   { tool: Tool.Bulldoze, label: '撤去', key: '7', group: 'bulldoze', icon: 'bulldoze' },
 ];
@@ -185,6 +200,14 @@ export function expenseOf(tool: Tool): Expense | null {
       return Expense.FireStation;
     case Tool.PoliceStation:
       return Expense.PoliceStation;
+    case Tool.Hospital:
+      return Expense.Hospital;
+    case Tool.Park:
+      return Expense.Park;
+    case Tool.Stadium:
+      return Expense.Stadium;
+    case Tool.AmusementPark:
+      return Expense.AmusementPark;
     case Tool.Bulldoze:
       return Expense.Bulldoze;
     default:
@@ -192,14 +215,30 @@ export function expenseOf(tool: Tool): Expense | null {
   }
 }
 
-/** Which building each civic tool puts up. */
-const SERVICE_BUILDINGS: Record<
-  Tool.School | Tool.FireStation | Tool.PoliceStation,
-  BuildingType
-> = {
+/**
+ * Which building each civic tool puts up.
+ *
+ * A table rather than a switch, so a new civic building -- the hospital, the
+ * three leisure venues -- is one row here and one row in the building spec,
+ * with nothing in between to forget.
+ */
+type ServiceTool =
+  | Tool.School
+  | Tool.FireStation
+  | Tool.PoliceStation
+  | Tool.Hospital
+  | Tool.Park
+  | Tool.Stadium
+  | Tool.AmusementPark;
+
+const SERVICE_BUILDINGS: Record<ServiceTool, BuildingType> = {
   [Tool.School]: BuildingType.School,
   [Tool.FireStation]: BuildingType.FireStation,
   [Tool.PoliceStation]: BuildingType.PoliceStation,
+  [Tool.Hospital]: BuildingType.Hospital,
+  [Tool.Park]: BuildingType.Park,
+  [Tool.Stadium]: BuildingType.Stadium,
+  [Tool.AmusementPark]: BuildingType.AmusementPark,
 };
 
 export interface ToolResult {
@@ -277,7 +316,11 @@ export function applyTool(
     }
     case Tool.School:
     case Tool.FireStation:
-    case Tool.PoliceStation: {
+    case Tool.PoliceStation:
+    case Tool.Hospital:
+    case Tool.Park:
+    case Tool.Stadium:
+    case Tool.AmusementPark: {
       const built = world.placeService(tile, SERVICE_BUILDINGS[tool]) !== null;
       if (!built) return { applied: false, message: '道路に接する空きタイルにしか置けません' };
       economy.charge(expense as Expense);

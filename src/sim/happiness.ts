@@ -8,6 +8,7 @@ import {
 import { ticksToMinutes } from '../core/clock';
 import { createCitizen, type Citizen } from './citizen';
 import { shoppingSatisfaction } from './shopping';
+import { leisureSatisfaction } from './leisure';
 import { hasVacancy, isHome, type Building } from '../world/buildings';
 import type { World } from '../world/world';
 import type { Economy } from './economy';
@@ -28,6 +29,10 @@ export interface HappinessBreakdown {
   safety: number;
   /** Whether the civic services -- a school, a fire brigade -- reach home. */
   civic: number;
+  /** Whether this household actually gets out: parks, stadiums, the fairground. */
+  leisure: number;
+  /** How well the residents are, which is the hospital and the environment. */
+  health: number;
 }
 
 export interface MigrationReport {
@@ -59,6 +64,8 @@ export class Happiness {
     power: 100,
     safety: 100,
     civic: 0,
+    leisure: 50,
+    health: 70,
   };
 
   lastMigration: MigrationReport = { movedIn: 0, movedOut: 0 };
@@ -83,7 +90,7 @@ export class Happiness {
 
     const totals = {
       housing: 0, commute: 0, employment: 0, services: 0, power: 0,
-      safety: 0, civic: 0, overall: 0,
+      safety: 0, civic: 0, leisure: 0, health: 0, overall: 0,
     };
     // An overdraft is the city visibly failing to pay for itself, and everyone
     // living in it notices.
@@ -102,20 +109,31 @@ export class Happiness {
       const serviceScore = shoppingSatisfaction(c) * 100;
       const safety = home && home.alive ? clamp(100 - crime.at(home.tile)) : 50;
       const civic = home && home.alive ? civicScore(services, home) : 0;
+      // Getting out of the house is scored the same way the shopping is, and
+      // for the same reason: what matters is whether *this* household went
+      // anywhere, not how many parks the city has built.
+      const leisure = leisureSatisfaction(c) * 100;
 
       // The weights are the argument about what a city is for. Housing and
       // the commute still dominate -- they are what everybody spends their
       // day inside -- and the civic terms are deliberately small enough that
       // no single service rescues a badly built town, and large enough that a
       // district with none of them is visibly a worse place to live.
+      //
+      // Leisure and health were added at the expense of every other term
+      // rather than on top of them: the weights are a division of one hundred
+      // per cent of what a resident cares about, so a new term has to take
+      // its share from the others or the scale quietly inflates.
       const score = clamp(
-        housing * 0.25
-        + commute * 0.18
-        + employment * 0.15
-        + serviceScore * 0.12
-        + powered * 0.12
-        + safety * 0.1
-        + civic * 0.08
+        housing * 0.22
+        + commute * 0.16
+        + employment * 0.13
+        + serviceScore * 0.11
+        + powered * 0.11
+        + safety * 0.09
+        + civic * 0.07
+        + leisure * 0.07
+        + c.health * 0.04
         + solvency,
       );
       c.happiness = c.happiness === -1 ? score : c.happiness + (score - c.happiness) * 0.3;
@@ -131,6 +149,8 @@ export class Happiness {
       totals.power += powered;
       totals.safety += safety;
       totals.civic += civic;
+      totals.leisure += leisure;
+      totals.health += c.health;
       totals.overall += c.happiness;
     }
 
@@ -144,6 +164,8 @@ export class Happiness {
       power: totals.power / n,
       safety: totals.safety / n,
       civic: totals.civic / n,
+      leisure: totals.leisure / n,
+      health: totals.health / n,
     };
   }
 
@@ -256,11 +278,14 @@ function compactCitizens(world: World): void {
  * A school counts for more than a fire station, and not because education is
  * more important than not burning down: the fire brigade already shows up in
  * the player's face when a building is lost, while a school with nobody in
- * its catchment is invisible unless the residents say so.
+ * its catchment is invisible unless the residents say so. The hospital sits
+ * between them for the same reason -- its absence is visible in the health
+ * figure, so it does not need to shout here as well.
  */
 function civicScore(services: Services, home: Building): number {
-  return (services.serves(Service.School, home) ? 60 : 0)
-    + (services.serves(Service.Fire, home) ? 40 : 0);
+  return (services.serves(Service.School, home) ? 42 : 0)
+    + (services.serves(Service.Fire, home) ? 30 : 0)
+    + (services.serves(Service.Health, home) ? 28 : 0);
 }
 
 function employed(world: World, c: Citizen): boolean {

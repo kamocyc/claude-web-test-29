@@ -1,9 +1,18 @@
-import { MAP_SIZE } from '../config';
+import {
+  MAP_SIZE,
+  ORDINANCE_GREENING_AMENITY,
+  PARK_AMENITY,
+  PARK_REACH,
+  VENUE_AMENITY,
+  VENUE_REACH,
+} from '../config';
 import { idx, tileX, tileY } from '../core/grid';
 import { BuildingType, Resource, type TileIndex } from '../core/types';
 import type { World } from '../world/world';
 import type { NoiseField } from './noise';
 import type { CrimeField } from './crime';
+import { Ordinance, type Policies } from './policies';
+import { isLeisure } from '../world/buildings';
 
 /** How far the pleasant things reach. */
 const WATER_REACH = 6;
@@ -65,6 +74,8 @@ export interface LandValueFactors {
   shops: number;
   /** ...of offices. */
   offices: number;
+  /** Being near a park or one of the big leisure venues. */
+  parks: number;
   /** Traffic, industry and railways. Negative: noise takes value away. */
   noise: number;
   /** What the neighbourhood's crime takes off it. Negative, like the noise. */
@@ -78,7 +89,8 @@ export interface LandValueFactors {
 export class LandValueField {
   private readonly value = new Float32Array(MAP_SIZE * MAP_SIZE).fill(40);
 
-  update(world: World, noise: NoiseField, crime: CrimeField): void {
+  update(world: World, noise: NoiseField, crime: CrimeField, policies?: Policies): void {
+    const green = greeningFactor(policies);
     const amenity = new Float32Array(MAP_SIZE * MAP_SIZE);
 
     // Nature, from the map itself.
@@ -100,6 +112,13 @@ export class LandValueField {
       // A bus stop is worth having nearby, and worth much less than a station:
       // it is a pole on a road that was already there.
       else if (b.type === BuildingType.BusStop) spread(amenity, b.tile, 6, BUS_STOP_REACH);
+      // A park is the strongest thing per tile the player can put down, over
+      // the smallest radius: it cannot rescue a district, but it can rescue
+      // the block between the housing and whatever is spoiling it.
+      else if (isLeisure(b.type)) {
+        const [amount, reach] = leisureAmenity(b.type);
+        spread(amenity, b.tile, amount * green, reach);
+      }
     }
 
     for (let tile = 0; tile < this.value.length; tile++) {
@@ -129,7 +148,9 @@ export class LandValueField {
     noise: NoiseField,
     crime: CrimeField,
     tile: TileIndex,
+    policies?: Policies,
   ): LandValueFactors {
+    const green = greeningFactor(policies);
     let water = 0;
     for (const near of within(tile, WATER_REACH)) {
       if (world.map.isWater(near)) water += 10 * falloff(tile, near, WATER_REACH);
@@ -140,6 +161,7 @@ export class LandValueField {
     let station = 0;
     let shops = 0;
     let offices = 0;
+    let parks = 0;
     for (const b of world.buildings) {
       if (!b.alive) continue;
       if (b.type === BuildingType.Station) {
@@ -150,6 +172,9 @@ export class LandValueField {
         offices += 4 * falloff(tile, b.tile, SHOP_REACH);
       } else if (b.type === BuildingType.BusStop) {
         station += 6 * falloff(tile, b.tile, BUS_STOP_REACH);
+      } else if (isLeisure(b.type)) {
+        const [amount, reach] = leisureAmenity(b.type);
+        parks += amount * green * falloff(tile, b.tile, reach);
       }
     }
 
@@ -163,10 +188,12 @@ export class LandValueField {
       station,
       shops,
       offices,
+      parks,
       noise: -penalty,
       crime: -unsafe,
       target: clamp(
-        40 + water + greenery + view + station + shops + offices - penalty - unsafe,
+        40 + water + greenery + view + station + shops + offices + parks
+        - penalty - unsafe,
       ),
       current: this.at(tile),
     };
@@ -192,6 +219,18 @@ export class LandValueField {
   restore(values: Float32Array): void {
     this.value.set(values.subarray(0, this.value.length));
   }
+}
+
+/** What one leisure venue is worth to the ground, and how far it carries. */
+function leisureAmenity(type: BuildingType): [number, number] {
+  return type === BuildingType.Park
+    ? [PARK_AMENITY, PARK_REACH]
+    : [VENUE_AMENITY, VENUE_REACH];
+}
+
+/** The greening by-law, in the one place both the field and the panel read. */
+function greeningFactor(policies?: Policies): number {
+  return policies?.isOn(Ordinance.Greening) ? ORDINANCE_GREENING_AMENITY : 1;
 }
 
 /** The tiles within `radius` of `tile`, the disc `spread` writes into. */

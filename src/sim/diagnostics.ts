@@ -1,6 +1,7 @@
 import { BuildingType, CitizenState, Industry, type TileIndex } from '../core/types';
 import { industryOf, isHome, isWorkplace, type Building } from '../world/buildings';
 import { IncidentKind } from './emergency';
+import { leisureReport } from './leisure';
 import type { Simulation } from './simulation';
 
 /**
@@ -279,6 +280,40 @@ export function cityWarnings(sim: Simulation): CityWarning[] {
       title: `${services.homes - services.schooled}軒の住宅が学校に通えません`,
       advice: '学校を建てると学歴が上がり、同じ仕事でも生まれる賃金と税収が増えます。',
       count: services.homes - services.schooled,
+      focus: -1,
+    });
+  }
+
+  if (services.homes > 0 && services.hospitals === 0) {
+    warnings.push({
+      id: 'noHospital',
+      severity: 'info',
+      icon: '医',
+      title: '病院がありません',
+      advice: '病院が届かない地区は住民の健康が下がり、幸福度と地価に効いてきます。'
+        + '学校や消防と同じで、道路をたどって届く範囲だけが対象です。',
+      count: 0,
+      focus: -1,
+    });
+  }
+
+  // Leisure is judged on whether people actually got out, not on how many
+  // parks exist: a city with a fairground nobody can reach is the case this
+  // warning is for, and a building count would call that city well provided.
+  const leisure = leisureReport(world);
+  if (world.population >= 40 && leisure.satisfaction < 35) {
+    warnings.push({
+      id: 'noLeisure',
+      severity: 'info',
+      icon: '園',
+      title: leisure.parks + leisure.venues === 0
+        ? '公園やレジャー施設がありません'
+        : '住民が出かけられていません',
+      advice: leisure.parks + leisure.venues === 0
+        ? '公園は最も安い公共施設で、まわりの地価をいちばん強く上げます。'
+        : '施設が遠すぎるか、満員か、道路がつながっていません。'
+          + '公園を住宅地の中に増やすと、いちばん確実に効きます。',
+      count: 0,
       focus: -1,
     });
   }

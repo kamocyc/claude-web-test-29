@@ -146,7 +146,16 @@ function stopsNear(world: World, tile: TileIndex): Building[] {
  * Transit must be meaningfully faster, not merely faster, before someone
  * changes mode -- otherwise a one-tick difference flips the whole city onto
  * the train.
+ *
+ * The threshold is a parameter rather than the constant directly, because the
+ * fare-subsidy ordinance raises it: a subsidised rider will put up with a
+ * slower journey, and that is the entire mechanism -- one number, moved,
+ * where the mode choice was already being made.
  */
-export function transitWins(transitTicks: number, carTicks: number): boolean {
-  return transitTicks < carTicks * TRANSIT_PREFERENCE;
+export function transitWins(
+  transitTicks: number,
+  carTicks: number,
+  preference = TRANSIT_PREFERENCE,
+): boolean {
+  return transitTicks < carTicks * preference;
 }

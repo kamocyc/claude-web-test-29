@@ -15,6 +15,8 @@ export type PanelId =
   | 'budget'
   | 'stats'
   | 'services'
+  | 'lines'
+  | 'policies'
   | 'help';
 
 export interface HudCallbacks {
@@ -38,6 +40,8 @@ export interface HudState {
   showIssues: boolean;
   pendingStations: readonly number[];
   notice: string;
+  /** The name of the line being re-routed, or null when opening a new one. */
+  editingLine: string | null;
   /** Which information windows are open, so their buttons can light up. */
   openPanels: ReadonlySet<PanelId>;
 }
@@ -68,6 +72,7 @@ export class Hud {
   private readonly warningCountEl: HTMLElement;
   private readonly lineBar: HTMLElement;
   private readonly lineStatus: HTMLElement;
+  private readonly lineCommit: HTMLButtonElement;
   private readonly loadButton: HTMLButtonElement;
   private readonly toolButtons = new Map<Tool, HTMLButtonElement>();
   private readonly speedButtons: HTMLButtonElement[] = [];
@@ -186,6 +191,7 @@ export class Hud {
     const commit = document.createElement('button');
     commit.textContent = 'この順で開業する';
     commit.addEventListener('click', () => this.cb.onCommitLine());
+    this.lineCommit = commit;
     const cancel = document.createElement('button');
     cancel.textContent = '取消';
     cancel.addEventListener('click', () => this.cb.onCancelLine());
@@ -243,6 +249,10 @@ export class Hud {
     const rail = world.activeLines.filter((l) => l.mode === LineMode.Rail).length;
     const bus = world.activeLines.length - rail;
     this.setChip('transit', `${rail}路線 バス${bus}系統　待ち${sim.stats.live.waiting}`);
+    const services = sim.services.report;
+    this.setChip('civic', `健康${Math.round(services.health)}　余暇${
+      Math.round(sim.happiness.breakdown.leisure)}`);
+    this.chipWarn('civic', services.hospitals === 0 && world.population > 0);
 
     const warnings = cityWarnings(sim);
     const worst = warnings[0];
@@ -256,9 +266,12 @@ export class Hud {
     this.lineBar.hidden = picking === null;
     if (picking !== null) {
       const what = picking === LineMode.Rail ? '駅' : 'バス停';
+      const editing = state.editingLine !== null;
+      this.lineCommit.textContent = editing ? 'この順に変更する' : 'この順で開業する';
+      const prefix = editing ? `${state.editingLine} を編集中 — ` : '';
       this.lineStatus.textContent = state.pendingStations.length === 0
-        ? `${what}を順にクリックしてください（2つ以上）`
-        : `選択中: ${state.pendingStations.length} ${what}`;
+        ? `${prefix}${what}を順にクリックしてください（2つ以上）`
+        : `${prefix}選択中: ${state.pendingStations.length} ${what}`;
     }
 
     for (const [t, b] of this.toolButtons) b.classList.toggle('active', t === state.tool);
@@ -289,6 +302,7 @@ const CHIPS: ReadonlyArray<[string, string]> = [
   ['happiness', '幸福度'],
   ['power', '電力'],
   ['transit', '公共交通'],
+  ['civic', '暮らし'],
 ];
 
 /** The building half of the toolbar, in the order the groups appear. */
@@ -299,6 +313,7 @@ const TOOL_GROUP_LABELS: ReadonlyArray<[ToolGroup, string]> = [
   ['bus', 'バス'],
   ['zone', '区画'],
   ['civic', '公共'],
+  ['leisure', 'レジャー'],
   ['bulldoze', '撤去'],
 ];
 
@@ -309,6 +324,11 @@ const PANELS: ReadonlyArray<[PanelId, string, IconName]> = [
   ['budget', '財政', 'winBudget'],
   ['stats', '統計', 'winStats'],
   ['services', '公共', 'winServices'],
+  // Named for what the window does rather than for what it lists: there is
+  // already a *tool* called 路線, and two buttons with the same name on one
+  // bar is a coin toss.
+  ['lines', '路線の一覧と編集', 'winLines'],
+  ['policies', '条例', 'winPolicies'],
 ];
 
 const OVERLAYS: ReadonlyArray<[Overlay, string, IconName, string]> = [
@@ -333,6 +353,10 @@ const COST_HINTS: Partial<Record<string, string>> = {
   school: '¥30,000',
   fireStation: '¥26,000',
   policeStation: '¥24,000',
+  hospital: '¥34,000',
+  park: '¥3,500',
+  stadium: '¥45,000',
+  amusementPark: '¥90,000',
   bulldoze: '¥15',
 };
 

@@ -120,21 +120,29 @@ export function seedStartingTown(world: World): void {
 }
 
 /**
- * One school, one fire station and one police station, in the middle of the
- * housing where a small town would actually have put them.
+ * The civic minimum: a school, a fire station, a police station, a hospital
+ * and a couple of pocket parks, in the middle of the housing where a small
+ * town would actually have put them.
  *
  * The town starts with the civic minimum rather than with nothing, for the
  * same reason it starts with two power plants: the opening city has to be a
  * *working* one that is visibly running out of headroom, not a ruin. Each of
  * these reaches a couple of dozen blocks along the roads, so the district the
- * player grows next is out of range of all three -- which is the lesson, and
- * it is a much better one than watching the starting town burn.
+ * player grows next is out of range of every one of them -- which is the
+ * lesson, and it is a much better one than watching the starting town burn.
  */
 function seedCivicServices(world: World, west: { x: number; w: number }, top: number): void {
   const spots: Array<[TileIndex, BuildingType]> = [
     [idx(west.x + 3, top + 8), BuildingType.School],
     [idx(west.x + 3, top + 23), BuildingType.FireStation],
     [idx(west.x + 13, top + 13), BuildingType.PoliceStation],
+    [idx(west.x + 8, top + 28), BuildingType.Hospital],
+    // Two pocket parks in the housing, for the same reason the town starts
+    // with a school: the opening city has to demonstrate the thing before it
+    // runs out of it. Two parks cannot serve the district the player is about
+    // to grow, which is the lesson.
+    [idx(west.x + 8, top + 3), BuildingType.Park],
+    [idx(west.x + 18, top + 18), BuildingType.Park],
   ];
   for (const [tile, type] of spots) {
     if (world.placeService(tile, type)) continue;

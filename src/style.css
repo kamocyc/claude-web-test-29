@@ -443,6 +443,98 @@ h3.with-help { display: flex; align-items: center; }
 
 .budget-actions { display: flex; gap: 6px; margin-top: 4px; }
 
+/* --- The lines window ---------------------------------------------------
+   One block per service: a coloured header that is always there, and the
+   figures and controls only for the one the player has opened. A window
+   listing eight lines in full would be a wall of numbers with the one being
+   asked about somewhere in the middle of it. */
+
+.line-block {
+  border: 1px solid var(--line-border, rgba(255, 255, 255, 0.08));
+  border-radius: 6px;
+  margin-bottom: 6px;
+  overflow: hidden;
+}
+.line-block.selected { --line-border: rgba(255, 255, 255, 0.22); }
+
+.line-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: none;
+  border-left: 4px solid var(--line-color, var(--accent));
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.line-head:hover { background: rgba(255, 255, 255, 0.08); }
+.line-name { font-weight: 600; }
+.line-summary {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.line-block .stat-row { padding: 1px 8px; }
+
+.line-rename {
+  display: flex;
+  gap: 6px;
+  padding: 4px 8px;
+}
+.line-rename input {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text);
+  font: inherit;
+}
+
+.line-actions,
+.line-stops {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 8px;
+}
+.line-stops .line-stop { font-variant-numeric: tabular-nums; }
+.line-block h4 {
+  margin: 6px 8px 0;
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+/* --- The ordinances window ------------------------------------------------ */
+
+.policy {
+  border-left: 3px solid transparent;
+  padding: 4px 0 4px 7px;
+  margin-bottom: 2px;
+}
+.policy.on { border-left-color: var(--good, #4ade80); }
+
+.policy-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.policy-name { font-weight: 600; }
+.policy-cost {
+  margin-left: auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.policy .stat-note { margin: 2px 0 0; font-size: 11px; }
+
 .follow {
   display: flex;
   align-items: center;
