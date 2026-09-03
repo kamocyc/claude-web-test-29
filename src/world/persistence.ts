@@ -3,15 +3,23 @@ import type { CitizenState, TravelMode, BuildingType, TileIndex } from '../core/
 import type { Citizen } from '../sim/citizen';
 import { CAR_PROFILE } from '../sim/carFollowing';
 import { createLorry, type CargoKind, type Lorry, type LorryState } from '../sim/lorry';
+import { createBus, type Bus } from '../sim/bus';
+import {
+  createUnit,
+  type EmergencyUnit,
+  type Incident,
+  type IncidentKind,
+  type UnitState,
+} from '../sim/emergency';
 import type { TaxRates } from '../sim/economy';
 import { Simulation } from '../sim/simulation';
 import { setTrainPosition } from '../sim/trains';
 import type { RideLeg } from '../sim/transitPlanner';
 import type { Building } from './buildings';
-import type { TransitLine, Train } from './transit';
+import type { LineMode, TransitLine, Train } from './transit';
 import { World } from './world';
 
-export const SAVE_VERSION = 4;
+export const SAVE_VERSION = 5;
 export const SAVE_KEY = 'city-sim.save';
 
 /**
@@ -43,12 +51,15 @@ export interface SaveData {
   fieldBucket: number;
   migrationBucket: number;
   freightBucket: number;
+  servicesBucket: number;
+  emergencyBucket: number;
   settledDay: number;
   money: SavedEconomy;
   /** Base64 of the per-tile float fields (Float32, MAP_SIZE^2 each). */
   traffic: string;
   noise: string;
   landValue: string;
+  crime: string;
   /** Base64 of the byte layers, each MAP_SIZE^2 long. */
   terrain: string;
   road: string;
@@ -60,6 +71,9 @@ export interface SaveData {
   lines: SavedLine[];
   trains: SavedTrain[];
   lorries: SavedLorry[];
+  buses: SavedBus[];
+  units: SavedUnit[];
+  incidents: Incident[];
 }
 
 interface SavedEconomy {
@@ -108,6 +122,8 @@ interface SavedCitizen {
   wait: number;
   lastWait: number;
   train: number;
+  education: number;
+  hasCar: boolean;
   happy: number;
   unhappy: number;
   lastTrip: number;
@@ -119,12 +135,43 @@ interface SavedCitizen {
 interface SavedLine {
   name: string;
   color: string;
+  mode: number;
   stations: number[];
   route: TileIndex[];
   stopAt: number[];
   stopStation: number[];
-  trains: number[];
+  vehicles: number[];
   ridership: number;
+}
+
+interface SavedBus {
+  line: number;
+  nextStop: number;
+  dwellUntil: number;
+  passengers: number[];
+  resume: number;
+  s: number;
+  v: number;
+  x: number;
+  y: number;
+  blocked: number;
+  path?: TileIndex[];
+}
+
+interface SavedUnit {
+  kind: number;
+  home: number;
+  state: number;
+  incident: number;
+  resume: number;
+  lastResponse: number;
+  calls: number;
+  s: number;
+  v: number;
+  x: number;
+  y: number;
+  blocked: number;
+  path?: TileIndex[];
 }
 
 interface SavedLorry {
@@ -170,6 +217,8 @@ export function serialize(sim: Simulation): SaveData {
     fieldBucket: sim.lastFieldBucket,
     migrationBucket: sim.lastMigrationBucket,
     freightBucket: sim.lastFreightBucket,
+    servicesBucket: sim.lastServicesBucket,
+    emergencyBucket: sim.lastEmergencyBucket,
     settledDay: sim.lastSettledDay,
     money: {
       balance: sim.economy.balance,
@@ -180,6 +229,7 @@ export function serialize(sim: Simulation): SaveData {
     traffic: encodeBytes(new Uint8Array(sim.traffic.snapshot().buffer)),
     noise: encodeBytes(new Uint8Array(sim.noise.snapshot().buffer)),
     landValue: encodeBytes(new Uint8Array(sim.landValue.snapshot().buffer)),
+    crime: encodeBytes(new Uint8Array(sim.crime.snapshot().buffer)),
     terrain: encodeBytes(world.map.terrain),
     road: encodeBytes(world.map.road),
     rail: encodeBytes(world.map.rail),
@@ -190,6 +240,13 @@ export function serialize(sim: Simulation): SaveData {
     lines: world.lines.map(saveLine),
     trains: world.trains.map(saveTrain),
     lorries: world.lorries.map(saveLorry),
+    buses: world.buses.map(saveBus),
+    units: world.units.map(saveUnit),
+    // Incidents are events in flight rather than things on the map, so they
+    // live with the simulation that runs them -- but they are just as
+    // unrecoverable as a citizen's half-finished trip, and a load that
+    // silently put a burning building out would be a load that lied.
+    incidents: sim.emergency.snapshot(),
   };
 }
 
@@ -234,7 +291,9 @@ function saveCitizen(c: Citizen): SavedCitizen {
     routing: c.awaitingPath,
     wait: c.waitStartTick,
     lastWait: c.lastWaitTicks,
-    train: c.boardedTrain,
+    train: c.boardedVehicle,
+    education: c.education,
+    hasCar: c.hasCar,
     happy: c.happiness,
     unhappy: c.unhappyHours,
     lastTrip: c.lastTripTicks,
@@ -249,13 +308,50 @@ function saveLine(l: TransitLine): SavedLine {
   return {
     name: l.name,
     color: l.color,
+    mode: l.mode,
     stations: l.stations.slice(),
     route: l.route.slice(),
     stopAt: l.stopAt.slice(),
     stopStation: l.stopStation.slice(),
-    trains: l.trains.slice(),
+    vehicles: l.vehicles.slice(),
     ridership: l.ridership,
   };
+}
+
+function saveBus(b: Bus): SavedBus {
+  const out: SavedBus = {
+    line: b.line,
+    nextStop: b.nextStop,
+    dwellUntil: b.dwellUntil,
+    passengers: b.passengers.slice(),
+    resume: b.resumeAtTick,
+    s: b.s,
+    v: b.v,
+    x: b.x,
+    y: b.y,
+    blocked: b.blockedTicks,
+  };
+  if (b.path) out.path = b.path.slice();
+  return out;
+}
+
+function saveUnit(u: EmergencyUnit): SavedUnit {
+  const out: SavedUnit = {
+    kind: u.kind,
+    home: u.home,
+    state: u.state,
+    incident: u.incident,
+    resume: u.resumeAtTick,
+    lastResponse: u.lastResponseTicks,
+    calls: u.calls,
+    s: u.s,
+    v: u.v,
+    x: u.x,
+    y: u.y,
+    blocked: u.blockedTicks,
+  };
+  if (u.path) out.path = u.path.slice();
+  return out;
 }
 
 function saveLorry(l: Lorry): SavedLorry {
@@ -365,9 +461,11 @@ export function deserialize(data: SaveData): Simulation {
       retryAtTick: c.retry,
       ride: c.ride ?? null,
       legAfterRide: c.after ?? null,
-      boardedTrain: c.train,
+      boardedVehicle: c.train,
       waitStartTick: c.wait,
       lastWaitTicks: c.lastWait ?? 0,
+      education: c.education,
+      hasCar: c.hasCar,
       happiness: c.happy,
       unhappyHours: c.unhappy,
       lastTripTicks: c.lastTrip,
@@ -384,11 +482,12 @@ export function deserialize(data: SaveData): Simulation {
       id,
       name: l.name,
       color: l.color,
+      mode: l.mode as LineMode,
       stations: l.stations.slice(),
       route: l.route.slice(),
       stopAt: l.stopAt.slice(),
       stopStation: l.stopStation.slice(),
-      trains: l.trains.slice(),
+      vehicles: l.vehicles.slice(),
       ridership: l.ridership,
     });
   });
@@ -439,6 +538,42 @@ export function deserialize(data: SaveData): Simulation {
     world.lorries.push(lorry);
   });
 
+  world.buses.length = 0;
+  data.buses.forEach((b, index) => {
+    const bus = createBus(index, b.line, b.nextStop, 0);
+    bus.dwellUntil = b.dwellUntil;
+    bus.passengers = b.passengers.slice();
+    bus.resumeAtTick = b.resume;
+    bus.s = b.s;
+    bus.v = b.v;
+    bus.x = b.x;
+    bus.y = b.y;
+    bus.prevX = b.x;
+    bus.prevY = b.y;
+    bus.blockedTicks = b.blocked;
+    bus.path = b.path ?? null;
+    world.buses.push(bus);
+  });
+
+  world.units.length = 0;
+  data.units.forEach((u, index) => {
+    const unit = createUnit(index, u.kind as IncidentKind, u.home, 0);
+    unit.state = u.state as UnitState;
+    unit.incident = u.incident;
+    unit.resumeAtTick = u.resume;
+    unit.lastResponseTicks = u.lastResponse;
+    unit.calls = u.calls;
+    unit.s = u.s;
+    unit.v = u.v;
+    unit.x = u.x;
+    unit.y = u.y;
+    unit.prevX = u.x;
+    unit.prevY = u.y;
+    unit.blockedTicks = u.blocked;
+    unit.path = u.path ?? null;
+    world.units.push(unit);
+  });
+
   world.rng.setState(data.rngState);
   world.nextCitizenSeed = data.citizenSeed;
   world.revision++;
@@ -451,6 +586,8 @@ export function deserialize(data: SaveData): Simulation {
   sim.lastFieldBucket = data.fieldBucket;
   sim.lastMigrationBucket = data.migrationBucket;
   sim.lastFreightBucket = data.freightBucket;
+  sim.lastServicesBucket = data.servicesBucket ?? -1;
+  sim.lastEmergencyBucket = data.emergencyBucket ?? -1;
   sim.lastSettledDay = data.settledDay;
   sim.economy.restore({
     balance: data.money.balance,
@@ -464,9 +601,15 @@ export function deserialize(data: SaveData): Simulation {
   sim.traffic.restore(decodeFloatField(data.traffic));
   sim.noise.restore(decodeFloatField(data.noise));
   sim.landValue.restore(decodeFloatField(data.landValue));
+  sim.crime.restore(decodeFloatField(data.crime));
+  sim.emergency.restore(data.incidents ?? []);
   // Power is not saved: it is a pure function of the city, and the first slow
-  // tick after loading recomputes it before anything can read it.
+  // tick after loading recomputes it before anything can read it. Civic
+  // coverage is the same kind of thing and is recomputed here for the same
+  // reason -- a panel opened before the first slow tick would otherwise say
+  // the schools reach nobody.
   sim.power.update(world);
+  sim.services.update(world);
 
   // Anyone whose routing request was still queued when the save was taken
   // needs it re-issued: the queue itself belongs to the old simulation.

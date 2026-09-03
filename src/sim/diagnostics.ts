@@ -1,5 +1,6 @@
 import { BuildingType, CitizenState, Industry, type TileIndex } from '../core/types';
-import { industryOf, isWorkplace, type Building } from '../world/buildings';
+import { industryOf, isHome, isWorkplace, type Building } from '../world/buildings';
+import { IncidentKind } from './emergency';
 import type { Simulation } from './simulation';
 
 /**
@@ -120,6 +121,25 @@ export function cityWarnings(sim: Simulation): CityWarning[] {
     });
   }
 
+  // A fire has a clock on it, so it outranks everything except insolvency:
+  // by the time the player has finished reading the rest of the list the
+  // building is gone.
+  const emergency = sim.emergency.report;
+  if (emergency.fires > 0) {
+    warnings.push({
+      id: 'fire',
+      severity: 'critical',
+      icon: '火',
+      title: `${emergency.fires}件の火災が発生しています`,
+      advice: emergency.unanswered > 0
+        ? '消防車が向かっていません。消防署を建てるか、現場まで道路をつないでください。'
+        : '消防車が向かっています。到着が間に合わないなら、'
+          + '消防署をその地区に増やすか、途中の渋滞を解消してください。',
+      count: emergency.fires,
+      focus: firstIncidentTile(sim, IncidentKind.Fire),
+    });
+  }
+
   if (power.shortfall > 0) {
     warnings.push({
       id: 'powerShortfall',
@@ -211,6 +231,58 @@ export function cityWarnings(sim: Simulation): CityWarning[] {
     });
   }
 
+  const services = sim.services.report;
+  if (services.fireStations === 0 && world.buildings.some((b) => b.alive && isHome(b.type))) {
+    warnings.push({
+      id: 'noFireStation',
+      severity: 'warning',
+      icon: '火',
+      title: '消防署がありません',
+      advice: '火災は誰も消しに来なければ建物ごと失われます。'
+        + '消防署は道路をたどって届く範囲だけを守れるので、地区ごとに必要です。',
+      count: 0,
+      focus: -1,
+    });
+  }
+
+  if (emergency.buildingsLostToday > 0) {
+    warnings.push({
+      id: 'burned',
+      severity: 'warning',
+      icon: '火',
+      title: `本日 ${emergency.buildingsLostToday} 件の建物が焼失しました`,
+      advice: '消防署をその地区の近くに建ててください。到着時間は道路と渋滞そのものです。',
+      count: emergency.buildingsLostToday,
+      focus: -1,
+    });
+  }
+
+  const crime = sim.crime.meanResidential(world);
+  if (crime > 45) {
+    warnings.push({
+      id: 'crime',
+      severity: 'warning',
+      icon: '盗',
+      title: `住宅地の治安が悪化しています（犯罪度 ${Math.round(crime)}）`,
+      advice: '警察署を建てるか、地価を上げてください。'
+        + '犯罪は地価を下げ、下がった地価がさらに犯罪を呼びます。',
+      count: Math.round(crime),
+      focus: -1,
+    });
+  }
+
+  if (services.homes > 0 && services.schooled < services.homes * 0.5) {
+    warnings.push({
+      id: 'noSchool',
+      severity: 'info',
+      icon: '学',
+      title: `${services.homes - services.schooled}軒の住宅が学校に通えません`,
+      advice: '学校を建てると学歴が上がり、同じ仕事でも生まれる賃金と税収が増えます。',
+      count: services.homes - services.schooled,
+      focus: -1,
+    });
+  }
+
   const movedOut = sim.happiness.lastMigration.movedOut;
   if (movedOut > 0) {
     warnings.push({
@@ -239,6 +311,14 @@ export function cityWarnings(sim: Simulation): CityWarning[] {
   }
 
   return warnings;
+}
+
+/** Where the oldest incident of this kind is, so the player can go and look. */
+function firstIncidentTile(sim: Simulation, kind: IncidentKind): TileIndex {
+  for (const incident of sim.emergency.active) {
+    if (incident.kind === kind) return incident.tile;
+  }
+  return -1;
 }
 
 /** The tile of the first live building matching `test`, or -1. */

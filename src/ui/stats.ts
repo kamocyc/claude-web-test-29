@@ -4,6 +4,8 @@ import type { LiveStats, TripStats } from '../sim/statistics';
 import { vacantDwellings } from '../sim/happiness';
 import { ticksToMinutes } from '../core/clock';
 import { bar, note, row, section } from './widgets';
+import { LineMode } from '../world/transit';
+import { BUS_ID_BASE } from '../sim/bus';
 
 /** Shown by the window's "？". */
 export const STATS_HELP = '上半分はいまこの瞬間の市民の内訳、下半分は完了した移動の実績です。'
@@ -83,6 +85,8 @@ function wellbeingSection(sim: Simulation): HTMLElement {
     bar('　雇用', Math.round(h.employment), 100, '#4ade80'),
     bar('　食料', Math.round(h.services), 100, '#4fa3e3'),
     bar('　電気', Math.round(h.power), 100, '#f2d64b'),
+    bar('　治安', Math.round(h.safety), 100, '#b45cf0'),
+    bar('　公共', Math.round(h.civic), 100, '#7ec8a9'),
     row('直近1時間の移住', `+${migration.movedIn} / -${migration.movedOut} 人`),
     row('住宅の空き', `${vacantDwellings(sim.world)} 戸`),
   ]);
@@ -114,6 +118,8 @@ function citySection(sim: Simulation): HTMLElement {
       power.shortfall > 0),
     row('　停電中の建物', `${power.unpowered} 件`, power.unpowered > 0),
     row('平均地価', `${Math.round(sim.landValue.meanResidential(sim.world))} / 100`),
+    row('平均犯罪度', `${Math.round(sim.crime.meanResidential(sim.world))} / 100`),
+    row('平均学歴', `${Math.round(sim.services.report.education)} / 100`),
     row('食料のある世帯', `${Math.round(sim.chain.serviceLevel(sim.world) * 100)}%`),
     row('　一次産業の産出', `${chain.rawProduced.toFixed(0)} / 時`),
     row('　工場の生産', `${chain.goodsProduced.toFixed(0)} / 時`),
@@ -144,12 +150,17 @@ function modeRows(live: LiveStats): HTMLElement[] {
 function lineSection(sim: Simulation): HTMLElement {
   const lines = sim.world.activeLines;
   if (lines.length === 0) {
-    return section('路線', [note('路線なし')]);
+    return section('路線・系統', [note('路線なし')]);
   }
 
   const rows = lines.map((line) => {
     let aboard = 0;
-    for (const id of line.trains) aboard += sim.world.trains[id]?.passengers.length ?? 0;
+    for (const id of line.vehicles) {
+      const vehicle = line.mode === LineMode.Rail
+        ? sim.world.trains[id]
+        : sim.world.buses[id - BUS_ID_BASE];
+      aboard += vehicle?.passengers.length ?? 0;
+    }
     let waiting = 0;
     for (const station of line.stations) waiting += sim.stats.waitingAt(station);
 
@@ -161,7 +172,7 @@ function lineSection(sim: Simulation): HTMLElement {
     el.classList.add('line-row');
     return el;
   });
-  return section('路線', rows);
+  return section('路線・系統', rows);
 }
 
 function tripMode(trips: TripStats, mode: TravelMode): string {

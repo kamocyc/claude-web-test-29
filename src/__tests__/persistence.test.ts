@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { TICKS_PER_DAY } from '../config';
 import { idx } from '../core/grid';
-import { CitizenState, Zone, type BuildingId } from '../core/types';
+import { BuildingType, CitizenState, Zone, type BuildingId } from '../core/types';
+import { IncidentKind } from '../sim/emergency';
 import { Simulation } from '../sim/simulation';
-import { createLine } from '../world/lineBuilder';
+import { createBusLine, createLine } from '../world/lineBuilder';
 import { deserialize, serialize } from '../world/persistence';
 import { compactCity } from './helpers';
 import { World } from '../world/world';
@@ -40,6 +41,20 @@ function town(): World {
       if (w.adjacentRoad(tile) >= 0) w.paintZone(tile, Zone.Commercial);
     }
   }
+
+  // A bus route down the same corridor and the three civic services, so the
+  // save format is exercised on a city that has all of them rather than on
+  // the subset that existed when it was written.
+  const stops: BuildingId[] = [];
+  for (const x of [12, 45, 88]) {
+    const stop = w.placeBusStop(idx(x, y + 3));
+    if (stop) stops.push(stop.id);
+  }
+  createBusLine(w, stops);
+  w.placeService(idx(22, y + 1), BuildingType.School);
+  w.placeService(idx(24, y + 3), BuildingType.FireStation);
+  w.placeService(idx(26, y + 1), BuildingType.PoliceStation);
+
   powerTown(w);
   return w;
 }
@@ -56,6 +71,15 @@ function fingerprint(sim: Simulation): string {
   }
   for (const t of sim.world.trains) {
     parts.push(`T${t.s.toFixed(4)}:${t.passengers.length}`);
+  }
+  // Buses and emergency vehicles are road users whose position is as much
+  // part of the city as a lorry's: a save that put them back somewhere else
+  // would diverge within a tick.
+  for (const b of sim.world.buses) {
+    parts.push(`B${b.line}:${b.nextStop}:${b.s.toFixed(4)}:${b.passengers.length}`);
+  }
+  for (const u of sim.world.units) {
+    parts.push(`U${u.state}:${u.incident}:${u.s.toFixed(4)}`);
   }
   // Lorries belong in the fingerprint for the same reason the trains do: a
   // subsystem the identity test does not look at is a subsystem the identity
@@ -119,7 +143,7 @@ describe('save and load', () => {
     for (const c of riding) {
       const after = restored.world.citizens[c.id];
       expect(after.state).toBe(CitizenState.Riding);
-      expect(after.boardedTrain).toBe(c.boardedTrain);
+      expect(after.boardedVehicle).toBe(c.boardedVehicle);
       expect(after.ride?.alightStation).toBe(c.ride?.alightStation);
     }
     const aboard = (s: Simulation): number =>
@@ -176,6 +200,34 @@ describe('save and load', () => {
     expect(restored.economy.balance).toBeCloseTo(sim.economy.balance, 6);
     expect(restored.economy.lastDay.net).toBeCloseTo(sim.economy.lastDay.net, 6);
     expect(fingerprint(restored)).toBe(fingerprint(sim));
+  });
+
+  it('carries the buses, the incidents and what people were taught', () => {
+    const sim = new Simulation(town());
+    run(sim, TICKS_PER_DAY);
+    // A fire in progress is state a load has to keep: resuming into a city
+    // where the building is quietly fine again would be a load that lied.
+    const burning = sim.world.buildings.find((b) => b.alive && b.type === BuildingType.House)!;
+    sim.emergency.raise(burning, IncidentKind.Fire, sim.clock.tick, 900);
+
+    const restored = deserialize(JSON.parse(JSON.stringify(serialize(sim))));
+
+    expect(restored.world.buses.length).toBe(sim.world.buses.length);
+    expect(restored.world.buses.map((b) => b.passengers.length))
+      .toEqual(sim.world.buses.map((b) => b.passengers.length));
+    expect(restored.world.lines.map((l) => l.mode)).toEqual(sim.world.lines.map((l) => l.mode));
+    expect(restored.world.units.length).toBe(sim.world.units.length);
+
+    const live = restored.emergency.active;
+    expect(live).toHaveLength(1);
+    expect(live[0].building).toBe(burning.id);
+    expect(live[0].deadlineTick).toBe(sim.emergency.active[0].deadlineTick);
+
+    expect(restored.world.citizens.map((c) => [c.education, c.hasCar]))
+      .toEqual(sim.world.citizens.map((c) => [c.education, c.hasCar]));
+    for (let tile = 0; tile < 128 * 128; tile += 307) {
+      expect(restored.crime.at(tile)).toBeCloseTo(sim.crime.at(tile), 3);
+    }
   });
 
   it('refuses a save written by a different version', () => {

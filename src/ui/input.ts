@@ -128,4 +128,6 @@ const OVERLAY_KEYS: Readonly<Record<string, Overlay>> = {
   p: 'power',
   n: 'noise',
   v: 'landValue',
+  c: 'crime',
+  b: 'services',
 };

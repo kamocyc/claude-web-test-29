@@ -3,11 +3,23 @@ import { idx, tileX, tileY } from '../core/grid';
 import { BuildingType, Resource, type TileIndex } from '../core/types';
 import type { World } from '../world/world';
 import type { NoiseField } from './noise';
+import type { CrimeField } from './crime';
 
 /** How far the pleasant things reach. */
 const WATER_REACH = 6;
 const STATION_REACH = 10;
 const SHOP_REACH = 8;
+const BUS_STOP_REACH = 5;
+
+/**
+ * What a point of crime takes off a tile's value.
+ *
+ * Slightly less than noise, and for a reason worth stating: noise is
+ * permanent while the road or the factory is there, and crime is not -- a
+ * police station takes it away again. Weighting them the same would make a
+ * bad district unrecoverable.
+ */
+const CRIME_WEIGHT = 0.45;
 
 /**
  * What a tile is worth to live on, 0..100.
@@ -42,6 +54,8 @@ export interface LandValueFactors {
   offices: number;
   /** Traffic, industry and railways. Negative: noise takes value away. */
   noise: number;
+  /** What the neighbourhood's crime takes off it. Negative, like the noise. */
+  crime: number;
   /** Where the tile is heading: base + amenities - noise, clamped to 0..100. */
   target: number;
   /** Where it is now. Land value moves slowly, so the two differ. */
@@ -51,7 +65,7 @@ export interface LandValueFactors {
 export class LandValueField {
   private readonly value = new Float32Array(MAP_SIZE * MAP_SIZE).fill(40);
 
-  update(world: World, noise: NoiseField): void {
+  update(world: World, noise: NoiseField, crime: CrimeField): void {
     const amenity = new Float32Array(MAP_SIZE * MAP_SIZE);
 
     // Nature, from the map itself.
@@ -66,10 +80,15 @@ export class LandValueField {
       if (b.type === BuildingType.Station) spread(amenity, b.tile, 22, STATION_REACH);
       else if (b.type === BuildingType.Shop) spread(amenity, b.tile, 8, SHOP_REACH);
       else if (b.type === BuildingType.Office) spread(amenity, b.tile, 4, SHOP_REACH);
+      // A bus stop is worth having nearby, and worth much less than a station:
+      // it is a pole on a road that was already there.
+      else if (b.type === BuildingType.BusStop) spread(amenity, b.tile, 6, BUS_STOP_REACH);
     }
 
     for (let tile = 0; tile < this.value.length; tile++) {
-      const target = clamp(40 + amenity[tile] - noise.at(tile) * 0.6);
+      const target = clamp(
+        40 + amenity[tile] - noise.at(tile) * 0.6 - crime.at(tile) * CRIME_WEIGHT,
+      );
       // Land value moves slowly: it is a reputation, not a measurement.
       this.value[tile] += (target - this.value[tile]) * 0.25;
     }
@@ -88,7 +107,12 @@ export class LandValueField {
    * player has clicked on, where a per-tile record for all 65,536 tiles times
    * seven factors would be paid for on every field update.
    */
-  factorsAt(world: World, noise: NoiseField, tile: TileIndex): LandValueFactors {
+  factorsAt(
+    world: World,
+    noise: NoiseField,
+    crime: CrimeField,
+    tile: TileIndex,
+  ): LandValueFactors {
     let water = 0;
     for (const near of within(tile, WATER_REACH)) {
       if (world.map.isWater(near)) water += 10 * falloff(tile, near, WATER_REACH);
@@ -106,10 +130,13 @@ export class LandValueField {
         shops += 8 * falloff(tile, b.tile, SHOP_REACH);
       } else if (b.type === BuildingType.Office) {
         offices += 4 * falloff(tile, b.tile, SHOP_REACH);
+      } else if (b.type === BuildingType.BusStop) {
+        station += 6 * falloff(tile, b.tile, BUS_STOP_REACH);
       }
     }
 
     const penalty = noise.at(tile) * 0.6;
+    const unsafe = crime.at(tile) * CRIME_WEIGHT;
     return {
       base: 40,
       water,
@@ -118,7 +145,8 @@ export class LandValueField {
       shops,
       offices,
       noise: -penalty,
-      target: clamp(40 + water + greenery + station + shops + offices - penalty),
+      crime: -unsafe,
+      target: clamp(40 + water + greenery + station + shops + offices - penalty - unsafe),
       current: this.at(tile),
     };
   }

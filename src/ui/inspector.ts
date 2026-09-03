@@ -12,6 +12,12 @@ import { BUILDING_ISSUES, buildingIssue } from '../sim/diagnostics';
 import { Industry } from '../core/types';
 import { ZONE_LABELS } from '../world/zoneRules';
 import { help, HelpState, subheading } from './widgets';
+import { isTransitStop } from '../world/buildings';
+import { lineSpec, LineMode, type TransitLine } from '../world/transit';
+import { IncidentKind } from '../sim/emergency';
+import { BUS_ID_BASE } from '../sim/bus';
+import { Service } from '../sim/services';
+import type { World } from '../world/world';
 
 /** Shown by the window's "？". */
 export const INSPECTOR_HELP = '市民・建物・駅・トラックをクリックすると、そのものの現在がここに出ます。'
@@ -118,8 +124,8 @@ export class Inspector {
     }
     if (this.selectedStation) {
       const b = this.selectedStation;
-      this.title = b.type === BuildingType.Station ? '駅' : BUILDING_LABELS[b.type];
-      if (b.type === BuildingType.Station) this.updateStation(sim, b);
+      this.title = BUILDING_LABELS[b.type];
+      if (isTransitStop(b.type)) this.updateStation(sim, b);
       else this.updateBuilding(sim, b);
       return;
     }
@@ -139,6 +145,8 @@ export class Inspector {
       ['名前', `${c.name} (${c.age}歳)`],
       ['状態', stateLabel(c)],
       ['幸福度', c.happiness < 0 ? '—' : `${Math.round(c.happiness)} / 100${moodNote(c)}`],
+      ['学歴', `${Math.round(c.education)} / 100`],
+      ['車', c.hasCar ? 'あり' : 'なし（徒歩か公共交通）'],
       ['自宅', home ? address(home.tile) : '—'],
       ['職場', work ? address(work.tile) : '未就業'],
       ['出勤', formatMinute(departForWorkMinute(c.seed))],
@@ -160,7 +168,7 @@ export class Inspector {
         rows.push(['ホームの人数', `${sim.stats.waitingAt(c.ride.boardStation)} 人`]);
       }
       if (c.state === CitizenState.Riding) {
-        const train = world.trains[c.boardedTrain];
+        const train = world.trains[c.boardedVehicle];
         if (train) {
           rows.push(['乗客数', `${train.passengers.length} / ${TRAIN_CAPACITY} 人`]);
         }
@@ -202,7 +210,10 @@ export class Inspector {
       this.body.append(...subheading('住環境'));
       this.body.appendChild(definitionList([
         ['騒音', `${Math.round(sim.noise.at(home.tile))} / 100`],
+        ['治安', `${Math.round(100 - sim.crime.at(home.tile))} / 100`],
         ['電気', home.powered ? '来ている' : '来ていない'],
+        ['学校', sim.services.serves(Service.School, home) ? '通える' : '通えない'],
+        ['消防', sim.services.serves(Service.Fire, home) ? '間に合う' : '届かない'],
         ['食料の備え', `${c.pantry.toFixed(1)} 日分${c.lastShopFailed ? '（前回買えず）' : ''}`],
       ]));
       this.appendLandValue(sim, home.tile);
@@ -218,7 +229,7 @@ export class Inspector {
    * "駅が近い、でも工場の騒音で目減りしている", which is something to act on.
    */
   private appendLandValue(sim: Simulation, tile: number): void {
-    const f = sim.landValue.factorsAt(sim.world, sim.noise, tile);
+    const f = sim.landValue.factorsAt(sim.world, sim.noise, sim.crime, tile);
     this.body.append(
       ...subheading(
         `地価 ${Math.round(f.current)} / 100 の内訳`,
@@ -287,7 +298,21 @@ export class Inspector {
       [isHome(b.type) ? '居住者' : '従業員', `${b.occupants.length} / ${b.capacity} 人`],
       ['電気', b.powered ? `来ている（${spec.power}）` : '⚠ 来ていない'],
       ['騒音', `${Math.round(sim.noise.at(b.tile))} / 100`],
+      ['治安', `${Math.round(100 - sim.crime.at(b.tile))} / 100`],
+      ['消防', sim.services.serves(Service.Fire, b) ? '署から届く' : '⚠ 届かない'],
     ];
+
+    // What the city's own buildings are for, said in the terms the panel for
+    // the city uses -- a station keeps its passengers, a school its catchment.
+    if (b.type === BuildingType.School) {
+      rows.push(['市内で通える住宅', `${countServed(sim, Service.School)} 軒`]);
+    } else if (b.type === BuildingType.FireStation) {
+      rows.push(['市内で守れる住宅', `${countServed(sim, Service.Fire)} 軒`]);
+      rows.push(['出動中', `${busyUnits(sim, b.id)} 台 / ${unitsOf(sim, b.id)} 台`]);
+    } else if (b.type === BuildingType.PoliceStation) {
+      rows.push(['付近の治安', `${Math.round(100 - sim.crime.at(b.tile))} / 100`]);
+      rows.push(['出動中', `${busyUnits(sim, b.id)} 台 / ${unitsOf(sim, b.id)} 台`]);
+    }
 
     const industry = industryOf(b.type);
     if (industry === Industry.Primary) {
@@ -320,6 +345,31 @@ export class Inspector {
     }
 
     this.body.innerHTML = '';
+
+    // An incident outranks whatever else is wrong with the building: it has a
+    // clock on it, and the rest does not.
+    const incident = sim.emergency.incidentAt(b.id);
+    if (incident) {
+      const fire = incident.kind === IncidentKind.Fire;
+      const left = Math.max(0, incident.deadlineTick - sim.clock.tick);
+      const banner = document.createElement('p');
+      banner.className = `warning warning-${fire ? 'critical' : 'warning'}`;
+      banner.textContent = fire
+        ? `火災発生中 — あと ${Math.round(ticksToMinutes(left))} 分で全焼`
+        : `盗難発生中 — あと ${Math.round(ticksToMinutes(left))} 分`;
+      const advice = help(
+        fire
+          ? '消防車が到着すれば消し止められます。間に合わなければ建物は失われます。'
+            + '道路がつながっているか、消防署が遠すぎないかを確認してください。'
+          : 'パトカーが到着すれば解決します。間に合わなければ商品が盗まれ、'
+            + 'その一帯の治安がさらに悪化します。',
+        this.helpState,
+        fire ? 'fire' : 'crime',
+      );
+      banner.appendChild(advice.button);
+      this.body.append(banner, advice.body);
+    }
+
     const issue = buildingIssue(b);
     if (issue !== null) {
       const style = BUILDING_ISSUES[issue];
@@ -350,15 +400,17 @@ export class Inspector {
     const rows: Array<[string, string]> = [
       ['場所', address(station.tile)],
       ['待ち人数', `${sim.stats.waitingAt(station.id)} 人`],
-      ['乗り入れ路線', lines.length === 0 ? 'なし' : lines.map((l) => l.name).join('、')],
+      ['乗り入れ', lines.length === 0 ? 'なし' : lines.map((l) => l.name).join('、')],
       ['電気', station.powered ? '来ている' : '⚠ 来ていない'],
       ['区画', ZONE_LABELS[world.map.getZone(station.tile)]],
     ];
 
     for (const line of lines) {
-      let aboard = 0;
-      for (const id of line.trains) aboard += world.trains[id]?.passengers.length ?? 0;
-      rows.push([`${line.name} の列車`, `${line.trains.length} 本 ／ 乗車 ${aboard} 人`]);
+      const spec = lineSpec(line);
+      rows.push([
+        `${line.name} の${spec.label === 'バス' ? '車両' : '列車'}`,
+        `${line.vehicles.length} 本 ／ 乗車 ${aboardOn(world, line)} 人`,
+      ]);
       rows.push([`${line.name} のべ乗車`, `${line.ridership} 人`]);
     }
 
@@ -368,6 +420,10 @@ export class Inspector {
 }
 
 const BUILDING_LABELS: Record<BuildingType, string> = {
+  [BuildingType.BusStop]: 'バス停',
+  [BuildingType.School]: '学校',
+  [BuildingType.FireStation]: '消防署',
+  [BuildingType.PoliceStation]: '警察署',
   [BuildingType.House]: '低密度住宅',
   [BuildingType.Apartment]: '高密度住宅',
   [BuildingType.Shop]: '商店',
@@ -477,4 +533,37 @@ function signedPoints(value: number): string {
   const rounded = Math.round(value);
   if (rounded === 0) return '±0';
   return rounded > 0 ? `+${rounded}` : `${rounded}`;
+}
+
+
+/** Riders aboard every vehicle working a line right now. */
+function aboardOn(world: World, line: TransitLine): number {
+  let aboard = 0;
+  for (const id of line.vehicles) {
+    const vehicle = line.mode === LineMode.Rail
+      ? world.trains[id]
+      : world.buses[id - BUS_ID_BASE];
+    aboard += vehicle?.passengers.length ?? 0;
+  }
+  return aboard;
+}
+
+/**
+ * Homes this kind of service reaches, city-wide.
+ *
+ * Deliberately not per-station: coverage is a union over every station of that
+ * kind, so "how many homes does *this* school serve" has no answer that two
+ * overlapping catchments would agree on. The row says 市内 for that reason.
+ */
+function countServed(sim: Simulation, service: Service): number {
+  const report = sim.services.report;
+  return service === Service.School ? report.schooled : report.fireCovered;
+}
+
+function unitsOf(sim: Simulation, station: number): number {
+  return sim.world.units.filter((u) => u.home === station).length;
+}
+
+function busyUnits(sim: Simulation, station: number): number {
+  return sim.world.units.filter((u) => u.home === station && u.path !== null).length;
 }

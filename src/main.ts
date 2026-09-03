@@ -1,6 +1,5 @@
 import { tileX, tileY } from './core/grid';
 import {
-  BuildingType,
   isAtRest,
   type BuildingId,
   type TileIndex,
@@ -14,14 +13,16 @@ import { attachInput } from './ui/input';
 import { Hud, type PanelId } from './ui/hud';
 import { Inspector, INSPECTOR_HELP } from './ui/inspector';
 import { StatsPanel, STATS_HELP } from './ui/stats';
+import { ServicesPanel, SERVICES_HELP } from './ui/services';
 import { PowerPanel, POWER_HELP } from './ui/power';
 import { WarningsPanel, WARNINGS_HELP } from './ui/warnings';
 import { HelpPanel } from './ui/help';
 import { InfoWindow } from './ui/window';
-import { applyTool, isDragTool, Tool, TOOL_BY_KEY } from './ui/tools';
+import { applyTool, isDragTool, lineToolFor, Tool, TOOL_BY_KEY } from './ui/tools';
 import { BudgetPanel, BUDGET_HELP } from './ui/budget';
 import type { Overlay } from './render/renderer';
-import { createLineThrough } from './world/lineBuilder';
+import { createBusLine, createLineThrough } from './world/lineBuilder';
+import { LineMode, specForMode } from './world/transit';
 import { hasSavedCity, loadFromStorage, saveToStorage } from './world/persistence';
 import { newGame, STARTING_VIEW } from './world/scenario';
 
@@ -45,6 +46,7 @@ const windows: Record<PanelId, InfoWindow> = {
   power: new InfoWindow(windowLayer, 'power', '電力', { x: 350, y: 40, width: 300 }),
   budget: new InfoWindow(windowLayer, 'budget', '財政', { x: 670, y: 70, width: 300 }),
   stats: new InfoWindow(windowLayer, 'stats', '統計', { x: right(700), y: 100, width: 320 }),
+  services: new InfoWindow(windowLayer, 'services', '公共', { x: 700, y: 120, width: 320 }),
   help: new InfoWindow(windowLayer, 'help', '遊びかた', { x: 380, y: 90, width: 360 }),
 };
 
@@ -57,6 +59,7 @@ windows.warnings.setHelp(WARNINGS_HELP);
 windows.power.setHelp(POWER_HELP);
 windows.budget.setHelp(BUDGET_HELP);
 windows.stats.setHelp(STATS_HELP);
+windows.services.setHelp(SERVICES_HELP);
 
 /**
  * The simulation is a `let` rather than a `const` because loading a save
@@ -70,6 +73,7 @@ const renderer = new Renderer(ctx, camera);
 const inspector = new Inspector(windows.inspector.body);
 const statsPanel = new StatsPanel(windows.stats.body);
 const powerPanel = new PowerPanel(windows.power.body);
+const servicesPanel = new ServicesPanel(windows.services.body);
 new HelpPanel(windows.help.body);
 const warningsPanel = new WarningsPanel(windows.warnings.body, {
   onShowMe: (tile) => showTile(tile),
@@ -104,7 +108,7 @@ function say(message: string): void {
 const hud = new Hud(topbarRoot, toolbarRoot, {
   onTool: (t) => {
     tool = t;
-    if (t !== Tool.Line) pendingStations = [];
+    if (lineToolFor(t) === null) pendingStations = [];
   },
   onSpeed: (i) => sim.clock.setSpeedIndex(i),
   onToggleZones: () => (showZones = !showZones),
@@ -135,8 +139,9 @@ camera.centerOn(STARTING_VIEW.x, STARTING_VIEW.y);
 
 attachInput(canvas, camera, {
   onPaint: (tile) => {
-    if (tool === Tool.Line) {
-      pickStation(tile);
+    const picking = lineToolFor(tool);
+    if (picking !== null) {
+      pickStop(tile, picking);
       return;
     }
     if (tool === Tool.Select) return;
@@ -152,19 +157,20 @@ attachInput(canvas, camera, {
     const next = TOOL_BY_KEY[key];
     if (!next) return;
     tool = next;
-    if (next !== Tool.Line) pendingStations = [];
+    if (lineToolFor(next) === null) pendingStations = [];
   },
   onToggleZones: () => (showZones = !showZones),
   onOverlayKey: (o) => (overlay = overlay === o ? 'none' : o),
   isDragging: () => isDragTool(tool),
 });
 
-/** Append a clicked station to the line being built, or remove it if repeated. */
-function pickStation(tile: TileIndex): void {
+/** Append a clicked stop to the line being built, or remove it if repeated. */
+function pickStop(tile: TileIndex, mode: LineMode): void {
+  const want = specForMode(mode).stopType;
   const id = sim.world.map.building[tile];
   const b = id >= 0 ? sim.world.buildings[id] : undefined;
-  if (!b || !b.alive || b.type !== BuildingType.Station) {
-    say('駅をクリックしてください');
+  if (!b || !b.alive || b.type !== want) {
+    say(mode === LineMode.Rail ? '駅をクリックしてください' : 'バス停をクリックしてください');
     return;
   }
   const at = pendingStations.lastIndexOf(b.id);
@@ -176,14 +182,32 @@ function pickStation(tile: TileIndex): void {
 }
 
 /**
- * Open a service through the stations the player picked, in that order,
- * laying whatever track is missing between them.
+ * Open a service through the stops the player picked, in that order.
+ *
+ * A railway lays whatever track is missing between the stations; a bus route
+ * lays nothing at all and simply refuses if the roads do not already join the
+ * stops up -- which is the difference between the two modes in one function.
  */
 function commitLine(): void {
+  const mode = lineToolFor(tool);
+  if (mode === null) return;
+
   if (pendingStations.length < 2) {
-    say('路線には2駅以上必要です');
+    say(mode === LineMode.Rail ? '路線には2駅以上必要です' : '系統には2つ以上のバス停が必要です');
     return;
   }
+
+  if (mode === LineMode.Road) {
+    const line = createBusLine(sim.world, pendingStations);
+    if (!line) {
+      say('バス停どうしが道路でつながっていません');
+      return;
+    }
+    say(`${line.name}を開業しました`);
+    pendingStations = [];
+    return;
+  }
+
   const { line, builtTrack } = createLineThrough(sim.world, pendingStations);
   if (!line) {
     say('駅どうしを結ぶ線路を敷けません（水面や建物が邪魔をしています）');
@@ -360,6 +384,7 @@ function frame(now: number): void {
   if (windows.stats.isVisible) statsPanel.update(sim, now);
   if (windows.budget.isVisible) budgetPanel.update(sim, now);
   if (windows.power.isVisible) powerPanel.update(sim, now);
+  if (windows.services.isVisible) servicesPanel.update(sim, now);
   if (windows.warnings.isVisible) warningsPanel.update(sim, now);
 
   requestAnimationFrame(frame);

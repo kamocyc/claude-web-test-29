@@ -119,6 +119,30 @@ const SPECS: Record<BuildingType, BuildingSpec> = {
     capacity: 8, industry: Industry.None, power: 0, noise: 9,
     rawPerHour: 0, outputPerHour: 0, storage: 0, upkeep: 900, wagePerJob: 26,
   },
+  // A stop is a shelter: no staff, almost no power, and an upkeep small
+  // enough that a dense network of them is affordable -- which is the whole
+  // argument for buses over rail.
+  [BuildingType.BusStop]: {
+    capacity: 0, industry: Industry.None, power: 1, noise: 1,
+    rawPerHour: 0, outputPerHour: 0, storage: 0, upkeep: 60, wagePerJob: 0,
+  },
+  // The three civic services are workplaces the city pays for rather than
+  // taxes: their industry is None, so they are never charged commercial or
+  // industrial tax, but their staff pay income tax like anybody else. What
+  // they cost the city is the upkeep, and that is deliberately the largest in
+  // the table -- a fire brigade is a standing expense, not a purchase.
+  [BuildingType.School]: {
+    capacity: 12, industry: Industry.None, power: 12, noise: 2,
+    rawPerHour: 0, outputPerHour: 0, storage: 0, upkeep: 1_000, wagePerJob: 40,
+  },
+  [BuildingType.FireStation]: {
+    capacity: 8, industry: Industry.None, power: 10, noise: 2,
+    rawPerHour: 0, outputPerHour: 0, storage: 0, upkeep: 900, wagePerJob: 38,
+  },
+  [BuildingType.PoliceStation]: {
+    capacity: 8, industry: Industry.None, power: 10, noise: 2,
+    rawPerHour: 0, outputPerHour: 0, storage: 0, upkeep: 850, wagePerJob: 38,
+  },
 };
 
 export function specFor(type: BuildingType): BuildingSpec {
@@ -144,6 +168,42 @@ export function isWorkplace(type: BuildingType): boolean {
 
 export function industryOf(type: BuildingType): Industry {
   return SPECS[type].industry;
+}
+
+/**
+ * True for the buildings the player places directly rather than zoning for:
+ * transport and the civic services. They are the city's own property, which
+ * is why they carry upkeep and why demand never builds or abandons them.
+ */
+export function isCivic(type: BuildingType): boolean {
+  return type === BuildingType.Station
+    || type === BuildingType.PowerPlant
+    || type === BuildingType.BusStop
+    || type === BuildingType.School
+    || type === BuildingType.FireStation
+    || type === BuildingType.PoliceStation;
+}
+
+/** True for the two stations that keep emergency vehicles in the yard. */
+export function isEmergencyStation(type: BuildingType): boolean {
+  return type === BuildingType.FireStation || type === BuildingType.PoliceStation;
+}
+
+/** True for a stop or a station: somewhere a transit line can call. */
+export function isTransitStop(type: BuildingType): boolean {
+  return type === BuildingType.Station || type === BuildingType.BusStop;
+}
+
+/**
+ * Whether this building is doing its job well enough to count as a service.
+ *
+ * A school with no teachers and no electricity is a building, not a school --
+ * and saying so here rather than in each of the three services means the
+ * coverage map, the crime field and the fire brigade cannot disagree about
+ * which stations are actually running.
+ */
+export function isServing(b: Building): boolean {
+  return b.alive && b.powered && operatingRatio(b) > 0;
 }
 
 /**

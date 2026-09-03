@@ -1,4 +1,10 @@
 import {
+  BUS_ACCEL,
+  BUS_DECEL_COMFORT,
+  BUS_DECEL_MAX,
+  BUS_FREE_SPEED,
+  BUS_LENGTH,
+  BUS_MIN_GAP,
   CAR_ACCEL,
   CAR_DECEL_COMFORT,
   CAR_DECEL_MAX,
@@ -57,6 +63,24 @@ export const LORRY_PROFILE: FollowingProfile = {
   decelMax: LORRY_DECEL_MAX,
   length: LORRY_LENGTH,
   minGap: LORRY_MIN_GAP,
+};
+
+/**
+ * A bus: between a car and a lorry in every number.
+ *
+ * It cruises at car speed, because a vehicle that cannot be overtaken and
+ * runs below the traffic is a rolling roadblock rather than a service -- the
+ * same lesson the lorries taught. What makes it a bus rather than a big car is
+ * that it is slow away from a stop and takes up half again the road space, so
+ * a route down a narrow arterial is felt by everyone else on it.
+ */
+export const BUS_PROFILE: FollowingProfile = {
+  freeSpeed: BUS_FREE_SPEED,
+  accel: BUS_ACCEL,
+  decelComfort: BUS_DECEL_COMFORT,
+  decelMax: BUS_DECEL_MAX,
+  length: BUS_LENGTH,
+  minGap: BUS_MIN_GAP,
 };
 
 export const TRAIN_PROFILE: FollowingProfile = {

@@ -18,6 +18,10 @@ export const COLORS = {
   rail: '#4a4038',
   railTie: '#8b7a63',
   station: '#c58fe0',
+  busStop: '#e0a33c',
+  school: '#7ec8a9',
+  fireStation: '#e05c5c',
+  policeStation: '#5b8fd6',
   stationPending: '#ffc94a',
   platform: 'rgba(197, 143, 224, 0.35)',
 
@@ -64,11 +68,19 @@ export const COLORS = {
   path: 'rgba(255, 201, 74, 0.85)',
   lorryBody: '#dfe6ee',
   lorryCab: '#5d6b7d',
+  busBody: '#f0f4f8',
+  fireEngine: '#e03c3c',
+  policeCar: '#2f5fb8',
+  /** The flashing light on an emergency vehicle that is actually on a call. */
+  blueLight: '#7fd6ff',
   cargoRaw: '#a97c52',
   cargoGoods: '#4fa3e3',
   powered: '#4ade80',
   unpowered: '#ff5252',
   noise: '#ff7a45',
+  crime: '#b45cf0',
+  covered: '#4ade80',
+  uncovered: '#ff7a45',
 
   // Warning badges, by how urgent the thing they are reporting is.
   alertCritical: '#ff5252',

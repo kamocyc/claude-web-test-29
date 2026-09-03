@@ -13,6 +13,8 @@ import type { World } from '../world/world';
 import type { Economy } from './economy';
 import type { LandValueField } from './landValue';
 import type { NoiseField } from './noise';
+import type { CrimeField } from './crime';
+import { Service, type Services } from './services';
 
 /** Why the city is as happy or unhappy as it is, averaged over everyone. */
 export interface HappinessBreakdown {
@@ -22,6 +24,10 @@ export interface HappinessBreakdown {
   employment: number;
   services: number;
   power: number;
+  /** How safe home feels: the crime field, inverted. */
+  safety: number;
+  /** Whether the civic services -- a school, a fire brigade -- reach home. */
+  civic: number;
 }
 
 export interface MigrationReport {
@@ -51,6 +57,8 @@ export class Happiness {
     employment: 50,
     services: 50,
     power: 100,
+    safety: 100,
+    civic: 0,
   };
 
   lastMigration: MigrationReport = { movedIn: 0, movedOut: 0 };
@@ -63,7 +71,8 @@ export class Happiness {
     world: World,
     landValue: LandValueField,
     noise: NoiseField,
-    serviceLevel: number,
+    crime: CrimeField,
+    services: Services,
     economy: Economy,
     tick: number,
   ): void {
@@ -72,11 +81,13 @@ export class Happiness {
     // The default breakdown stands in until somebody lives here.
     if (world.citizens.length === 0) return;
 
-    const totals = { housing: 0, commute: 0, employment: 0, services: 0, power: 0, overall: 0 };
+    const totals = {
+      housing: 0, commute: 0, employment: 0, services: 0, power: 0,
+      safety: 0, civic: 0, overall: 0,
+    };
     // An overdraft is the city visibly failing to pay for itself, and everyone
     // living in it notices.
-    const civic = economy.inOverdraft ? -12 : 0;
-    void serviceLevel;
+    const solvency = economy.inOverdraft ? -12 : 0;
 
     for (const c of world.citizens) {
       const home = world.buildings[c.home];
@@ -89,14 +100,23 @@ export class Happiness {
       // Shopping is personal now: what matters is whether *this* household
       // could fill its cupboard, not whether the city as a whole was supplied.
       const serviceScore = shoppingSatisfaction(c) * 100;
+      const safety = home && home.alive ? clamp(100 - crime.at(home.tile)) : 50;
+      const civic = home && home.alive ? civicScore(services, home) : 0;
 
+      // The weights are the argument about what a city is for. Housing and
+      // the commute still dominate -- they are what everybody spends their
+      // day inside -- and the civic terms are deliberately small enough that
+      // no single service rescues a badly built town, and large enough that a
+      // district with none of them is visibly a worse place to live.
       const score = clamp(
-        housing * 0.3
-        + commute * 0.2
-        + employment * 0.2
-        + serviceScore * 0.15
-        + powered * 0.15
-        + civic,
+        housing * 0.25
+        + commute * 0.18
+        + employment * 0.15
+        + serviceScore * 0.12
+        + powered * 0.12
+        + safety * 0.1
+        + civic * 0.08
+        + solvency,
       );
       c.happiness = c.happiness === -1 ? score : c.happiness + (score - c.happiness) * 0.3;
 
@@ -109,6 +129,8 @@ export class Happiness {
       totals.employment += employment;
       totals.services += serviceScore;
       totals.power += powered;
+      totals.safety += safety;
+      totals.civic += civic;
       totals.overall += c.happiness;
     }
 
@@ -120,6 +142,8 @@ export class Happiness {
       employment: totals.employment / n,
       services: totals.services / n,
       power: totals.power / n,
+      safety: totals.safety / n,
+      civic: totals.civic / n,
     };
   }
 
@@ -221,9 +245,22 @@ function compactCitizens(world: World): void {
       .map((id) => remap.get(id) ?? -1)
       .filter((id) => id >= 0);
   }
-  // Riders whose citizen id moved are still aboard; their `boardedTrain` is
+  // Riders whose citizen id moved are still aboard; their `boardedVehicle` is
   // unchanged, and the train's list above was rewritten to match.
   world.revision++;
+}
+
+/**
+ * What the civic services are worth to a household, 0..100.
+ *
+ * A school counts for more than a fire station, and not because education is
+ * more important than not burning down: the fire brigade already shows up in
+ * the player's face when a building is lost, while a school with nobody in
+ * its catchment is invisible unless the residents say so.
+ */
+function civicScore(services: Services, home: Building): number {
+  return (services.serves(Service.School, home) ? 60 : 0)
+    + (services.serves(Service.Fire, home) ? 40 : 0);
 }
 
 function employed(world: World, c: Citizen): boolean {

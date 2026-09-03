@@ -1,7 +1,7 @@
 import { manhattan, neighbor, tileX, tileY } from '../core/grid';
 import { BuildingType, Terrain, type BuildingId, type Direction, type TileIndex } from '../core/types';
 import { findPath } from '../sim/pathfinding';
-import type { TransitLine } from './transit';
+import { LineMode, type TransitLine } from './transit';
 import type { World } from './world';
 
 export interface RouteLayout {
@@ -56,6 +56,68 @@ export function layoutRoute(world: World, stations: BuildingId[]): RouteLayout |
   }
 
   return { route, stopAt };
+}
+
+/**
+ * Lay a bus route out over the roads: the round trip a service makes, and
+ * where along it each stop falls.
+ *
+ * The same shape as the rail layout above, over the road network instead --
+ * and, unlike the railway, nothing is ever built. A bus route is a claim
+ * about roads that already exist, which is exactly what makes it the cheap
+ * answer: no track, no alignment, no land taken.
+ */
+export function layoutRoadRoute(world: World, stops: BuildingId[]): RouteLayout | null {
+  if (stops.length < 2) return null;
+
+  const oneWay: TileIndex[] = [];
+  const stopOneWay: number[] = [];
+
+  for (let i = 0; i < stops.length; i++) {
+    const stop = world.buildings[stops[i]];
+    if (!stop || !stop.alive || stop.type !== BuildingType.BusStop) return null;
+    world.refreshAccess(stop);
+    if (stop.accessRoad < 0) return null;
+
+    if (i === 0) {
+      oneWay.push(stop.accessRoad);
+      stopOneWay.push(0);
+      continue;
+    }
+
+    const prev = world.buildings[stops[i - 1]];
+    const segment = findPath(world.roads, prev.accessRoad, stop.accessRoad);
+    if (!segment || segment.length < 2) return null;
+
+    for (let k = 1; k < segment.length; k++) oneWay.push(segment[k]);
+    stopOneWay.push(oneWay.length - 1);
+  }
+
+  const lastIndex = oneWay.length - 1;
+  const route = oneWay.slice();
+  for (let i = lastIndex - 1; i >= 0; i--) route.push(oneWay[i]);
+
+  const stopAt = stopOneWay.slice();
+  for (let i = stops.length - 2; i >= 1; i--) {
+    stopAt.push(2 * lastIndex - stopOneWay[i]);
+  }
+
+  return { route, stopAt };
+}
+
+/**
+ * Open a bus route through the chosen stops.
+ *
+ * Deliberately much less machinery than its rail counterpart, because that is
+ * the difference between the two modes: a railway has to be built and a bus
+ * route only has to be *declared*. If the roads already join the stops up the
+ * service runs today; if they do not, the answer is a road, which the player
+ * was going to want anyway.
+ */
+export function createBusLine(world: World, stops: BuildingId[]): TransitLine | null {
+  const layout = layoutRoadRoute(world, stops);
+  if (!layout) return null;
+  return world.addLine(stops.slice(), layout.route, layout.stopAt, LineMode.Road);
 }
 
 export interface LineResult {

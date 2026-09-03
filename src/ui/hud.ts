@@ -1,13 +1,21 @@
 import { SPEED_MULTIPLIERS } from '../config';
 import { cityWarnings } from '../sim/diagnostics';
 import type { Simulation } from '../sim/simulation';
-import { expenseOf, Tool, TOOL_LABELS, type ToolGroup } from './tools';
+import { expenseOf, lineToolFor, Tool, TOOL_LABELS, type ToolGroup } from './tools';
+import { LineMode } from '../world/transit';
 import { formatMoney } from './money';
 import { iconMarkup, type IconName } from './icons';
 import type { Overlay } from '../render/renderer';
 
 /** The information windows the toolbar can open, in the order they appear. */
-export type PanelId = 'inspector' | 'warnings' | 'power' | 'budget' | 'stats' | 'help';
+export type PanelId =
+  | 'inspector'
+  | 'warnings'
+  | 'power'
+  | 'budget'
+  | 'stats'
+  | 'services'
+  | 'help';
 
 export interface HudCallbacks {
   onTool(tool: Tool): void;
@@ -40,7 +48,7 @@ export interface HudState {
  * bottom, and the map in between with nothing on it.
  *
  * The bottom bar is **one row of icons in labelled groups** -- 選択 / 道路 /
- * 鉄道 / 区画 / その他 / 撤去 / ビュー / ウィンドウ / システム. It used to be
+ * 鉄道 / バス / 区画 / 公共 / 撤去 / ビュー / ウィンドウ / システム. It used to be
  * two rows of wrapping text buttons, which meant the buttons moved whenever the
  * window was resized: a player who had learnt where 撤去 was found it somewhere
  * else on a narrower screen, and the bar ate a fifth of the map. Icons in a
@@ -176,7 +184,7 @@ export class Hud {
     this.lineBar = el('div', 'hud-linebar');
     this.lineStatus = el('span', 'hud-linestatus');
     const commit = document.createElement('button');
-    commit.textContent = 'この順で路線を作る';
+    commit.textContent = 'この順で開業する';
     commit.addEventListener('click', () => this.cb.onCommitLine());
     const cancel = document.createElement('button');
     cancel.textContent = '取消';
@@ -232,7 +240,9 @@ export class Hud {
         : `${Math.round(power.supply)}/${Math.round(power.demand)}`,
     );
     this.chipWarn('power', power.shortfall > 0);
-    this.setChip('transit', `${world.activeLines.length}路線　待ち${sim.stats.live.waiting}`);
+    const rail = world.activeLines.filter((l) => l.mode === LineMode.Rail).length;
+    const bus = world.activeLines.length - rail;
+    this.setChip('transit', `${rail}路線 バス${bus}系統　待ち${sim.stats.live.waiting}`);
 
     const warnings = cityWarnings(sim);
     const worst = warnings[0];
@@ -242,11 +252,13 @@ export class Hud {
     this.warningEl.className = 'hud-warning'
       + (state.notice ? ' notice' : worst ? ` ${worst.severity}` : '');
 
-    this.lineBar.hidden = state.tool !== Tool.Line;
-    if (state.tool === Tool.Line) {
+    const picking = lineToolFor(state.tool);
+    this.lineBar.hidden = picking === null;
+    if (picking !== null) {
+      const what = picking === LineMode.Rail ? '駅' : 'バス停';
       this.lineStatus.textContent = state.pendingStations.length === 0
-        ? '駅を順にクリックしてください（2駅以上）'
-        : `選択中: ${state.pendingStations.length} 駅`;
+        ? `${what}を順にクリックしてください（2つ以上）`
+        : `選択中: ${state.pendingStations.length} ${what}`;
     }
 
     for (const [t, b] of this.toolButtons) b.classList.toggle('active', t === state.tool);
@@ -276,7 +288,7 @@ const CHIPS: ReadonlyArray<[string, string]> = [
   ['jobs', '雇用'],
   ['happiness', '幸福度'],
   ['power', '電力'],
-  ['transit', '鉄道'],
+  ['transit', '公共交通'],
 ];
 
 /** The building half of the toolbar, in the order the groups appear. */
@@ -284,8 +296,9 @@ const TOOL_GROUP_LABELS: ReadonlyArray<[ToolGroup, string]> = [
   ['select', '選択'],
   ['road', '道路'],
   ['rail', '鉄道'],
+  ['bus', 'バス'],
   ['zone', '区画'],
-  ['other', 'その他'],
+  ['civic', '公共'],
   ['bulldoze', '撤去'],
 ];
 
@@ -295,6 +308,7 @@ const PANELS: ReadonlyArray<[PanelId, string, IconName]> = [
   ['power', '電力', 'winPower'],
   ['budget', '財政', 'winBudget'],
   ['stats', '統計', 'winStats'],
+  ['services', '公共', 'winServices'],
 ];
 
 const OVERLAYS: ReadonlyArray<[Overlay, string, IconName, string]> = [
@@ -302,6 +316,8 @@ const OVERLAYS: ReadonlyArray<[Overlay, string, IconName, string]> = [
   ['power', '電力', 'overlayPower', 'P'],
   ['noise', '騒音', 'overlayNoise', 'N'],
   ['landValue', '地価', 'overlayLandValue', 'V'],
+  ['crime', '治安', 'overlayCrime', 'C'],
+  ['services', '公共カバー', 'overlayServices', 'B'],
 ];
 
 const COST_HINTS: Partial<Record<string, string>> = {
@@ -309,7 +325,11 @@ const COST_HINTS: Partial<Record<string, string>> = {
   rail: '¥120/タイル',
   zone: '¥25/タイル',
   station: '¥4,000',
+  busStop: '¥900',
   powerPlant: '¥22,000',
+  school: '¥30,000',
+  fireStation: '¥26,000',
+  policeStation: '¥24,000',
   bulldoze: '¥15',
 };
 

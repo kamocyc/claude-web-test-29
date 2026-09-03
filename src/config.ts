@@ -119,6 +119,21 @@ export const GIVE_WAY_NOSE_IN = 0.1;
 /** Trips shorter than this are walked instead of driven. */
 export const WALK_DISTANCE_THRESHOLD = 12;
 
+/**
+ * The share of citizens who own a car.
+ *
+ * This is what makes public transport a real market rather than a curiosity.
+ * A car in this model is door to door, four times walking speed, and free --
+ * so a bus, which runs on the same road at the same speed and stops on the
+ * way, can never beat one on time. It does not have to: a fifth of the city
+ * has no car at all, and for them the choice is the bus or a very long walk.
+ *
+ * A fifth, rather than half, because the traffic model is the other thing
+ * this number sets. Taking a quarter of the cars off the road would quietly
+ * undo the congestion the whole simulation is built to produce.
+ */
+export const CAR_OWNERSHIP = 0.8;
+
 // --- Lorries ---------------------------------------------------------------
 // A lorry is a car with worse numbers -- but not *all* worse, and which ones
 // took some measuring.
@@ -403,6 +418,12 @@ export const BUILD_COSTS = {
   station: 4_000,
   powerPlant: 22_000,
   bulldoze: 15,
+  // A bus stop is a pole and a shelter: cheap enough to put one on every
+  // other block, which is the density the walk radius assumes.
+  busStop: 900,
+  school: 30_000,
+  fireStation: 26_000,
+  policeStation: 24_000,
 } as const;
 
 export const UPKEEP_PER_ROAD_TILE = 0.5;
@@ -506,3 +527,173 @@ export const MIGRATION_INTERVAL_MINUTES = 60;
  * town grows slowly and a miserable one not at all.
  */
 export const MOVE_IN_PER_HOUR = 26;
+
+// --- Buses -----------------------------------------------------------------
+// A bus is the other half of the transit answer, and it is deliberately the
+// *worse* one on paper: it runs on the same roads as everybody else, so it
+// queues in the same jam, and it carries half a train. What it has instead is
+// that it needs no track and its stops are cheap, so a bus line can be drawn
+// where a railway would never pay for itself -- and when the corridor it runs
+// on congests, the player watches their own bus sit in their own traffic,
+// which is the argument for building the railway.
+//
+// The numbers below put the break-even where that trade is interesting: over
+// a free-flowing 30-tile corridor the bus is about as quick as driving (it
+// stops, the car does not), and it wins outright once the road is busy,
+// because a full bus is 30 people who are not each driving a car.
+
+export const BUS_FREE_SPEED = CAR_FREE_SPEED;
+export const BUS_ACCEL = 0.0035;
+export const BUS_DECEL_COMFORT = 0.007;
+export const BUS_DECEL_MAX = 0.016;
+/** Longer than a car, shorter than a lorry: it fills a junction in between. */
+export const BUS_LENGTH = 0.4;
+export const BUS_MIN_GAP = 0.15;
+
+/** Half a train. Two full buses a minute is a busy urban route. */
+export const BUS_CAPACITY = 30;
+
+/** Ticks at a stop. Shorter than a train's: fewer doors, fewer people. */
+export const BUS_DWELL_TICKS = 14;
+
+/** Buses per route. More buses is a shorter wait, and more of them in the jam. */
+export const BUSES_PER_LINE = 3;
+
+/**
+ * How far somebody will walk to a bus stop, in tiles.
+ *
+ * Deliberately half the station figure. Bus stops are cheap and are meant to
+ * be dense: if people walked as far to a stop as to a station there would be
+ * no reason to place more than four of them, and the whole texture of a bus
+ * network -- a stop every few blocks -- would never appear.
+ */
+export const BUS_STOP_WALK_RADIUS = 7;
+
+// --- Civic services --------------------------------------------------------
+// Schools, fire stations and police stations are the first buildings the city
+// puts up for its residents rather than for its economy. Each one answers a
+// different question, and each one is deliberately modelled through a
+// different mechanism, because that is what the three things actually are:
+//
+//   school  -- a catchment. Can children get there by road at all?
+//   fire    -- a response. How long does an engine take to arrive?
+//   police  -- a field. How safe does this neighbourhood feel?
+//
+// Making all three "a radius that adds happiness" would have been half the
+// code and none of the game.
+
+/**
+ * How far each service reaches along the road network, in tiles.
+ *
+ * Measured over roads rather than as the crow flies, so a school on the far
+ * bank of the river serves nobody until somebody builds a bridge -- which is
+ * the same rule the power grid already follows, and for the same reason: what
+ * matters is whether the thing can actually be reached.
+ */
+export const SCHOOL_REACH_TILES = 24;
+export const FIRE_REACH_TILES = 34;
+
+/** Civic coverage is re-solved on the same cadence as the power grid. */
+export const SERVICES_INTERVAL_MINUTES = 30;
+
+/**
+ * Education, 0..100, and what it is worth.
+ *
+ * A resident within reach of a working school gains education steadily; one
+ * without keeps whatever they arrived with. It pays off in wages -- an
+ * educated workforce produces more per job, and the city taxes the difference
+ * -- which makes a school an investment with a payback period rather than an
+ * ornament. At 0.8 a point an hour a new arrival reaches full education in
+ * about four sim days, so the effect is visible within a session.
+ */
+export const STARTING_EDUCATION = 20;
+export const EDUCATION_PER_HOUR = 0.8;
+/** Wages at full education, as a multiple of the untaught rate. */
+export const EDUCATION_WAGE_BONUS = 0.5;
+
+// --- Crime -----------------------------------------------------------------
+// Crime is a field like noise: a property of a neighbourhood rather than of a
+// building. It rises with density and with cheap land, falls where a police
+// station is within reach, and lands on happiness and on land value -- so a
+// district the player has let rot gets visibly worse to live in, and the fix
+// is a station and the land value that follows it.
+
+/** Crime pressure one resident and one shop put on their surroundings. */
+export const CRIME_PER_RESIDENT = 2.2;
+export const CRIME_PER_SHOP = 12;
+/** How far that pressure spreads, in tiles. */
+export const CRIME_SPREAD = 6;
+
+/**
+ * Extra crime on land nobody wants, at land value 0, falling to none at 60.
+ * Poverty is a cause the player can act on: raise the land value, and the
+ * crime that came with it goes away.
+ */
+export const CRIME_FROM_POVERTY = 30;
+
+/** What one police station takes off the crime score, and how far it reaches. */
+export const POLICE_RELIEF = 55;
+export const POLICE_REACH = 18;
+
+/** How fast the crime field follows the city, like the noise field. */
+export const CRIME_SMOOTHING = 0.2;
+
+// --- Emergencies -----------------------------------------------------------
+// Fires and crimes are the first events in this simulation that are *against*
+// the player, and they are deliberately answered by road vehicles rather than
+// by a coverage percentage. An engine that has to cross the city through the
+// jam the player built is the point: response time is emergent, and a fire
+// station on the wrong side of a congested corridor is a station that does not
+// work, exactly as a factory there is a factory that does not deliver.
+
+/** Emergency vehicles kept at each station. */
+export const UNITS_PER_STATION = 2;
+
+/**
+ * Chance per building per sim-day of a fire starting, before the type
+ * multiplier. About one fire a day in a town of 250 buildings: often enough
+ * that a city without a fire brigade visibly loses buildings, rare enough
+ * that one is an event rather than a chore.
+ */
+export const FIRE_CHANCE_PER_DAY = 0.004;
+
+/** Industry burns more often than housing; a power station most of all. */
+export const FIRE_RISK_INDUSTRIAL = 4;
+export const FIRE_RISK_POWER = 6;
+
+/** A station within reach also inspects: fires there start less often. */
+export const FIRE_INSPECTION_RELIEF = 0.6;
+
+/**
+ * How long a building burns before it is lost, in ticks. 900 ticks is a bit
+ * over two sim hours -- long enough to watch an engine fight its way across
+ * town, short enough that ignoring the alarm costs the building.
+ */
+export const FIRE_BURN_TICKS = 900;
+
+/** Ticks an engine spends on scene putting a fire out. */
+export const FIRE_WORK_TICKS = 120;
+
+/**
+ * Chance per sim-day that a building at crime 100 is hit. Scaled by the crime
+ * field, so a well-policed district is quiet and a neglected one is not.
+ */
+export const CRIME_CHANCE_PER_DAY = 0.06;
+
+/** How long a crime stands unanswered before it simply succeeds. */
+export const CRIME_OPEN_TICKS = 600;
+
+/** Ticks a patrol car spends on scene. */
+export const CRIME_WORK_TICKS = 90;
+
+/** Goods a burglary takes from a shop that nobody answered for. */
+export const CRIME_THEFT_UNITS = 12;
+
+/** Crime added to the neighbourhood by an offence that went unanswered. */
+export const CRIME_UNSOLVED_PENALTY = 14;
+
+/** How often incidents are rolled for, and units re-dispatched. */
+export const EMERGENCY_INTERVAL_MINUTES = 30;
+
+/** How long a unit with no route waits before trying again. */
+export const EMERGENCY_RETRY_TICKS = 200;

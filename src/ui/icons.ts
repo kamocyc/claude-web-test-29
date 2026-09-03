@@ -30,6 +30,21 @@ const ICONS = {
   powerPlant:
     '<path d="M3.5 21h17"/><path d="M4.5 21v-9l5 2.6V12l5 2.6V21"/><path d="M16 21V6.5h4.5V21"/>'
     + '<path d="M18.9 9.5 17.3 12.7h2.4L18.1 15.9"/>',
+  busStop:
+    '<path d="M3.5 20.5h17"/><path d="M12 20.5V9"/><rect x="5.5" y="3.5" width="13" height="6" rx="1.5"/>'
+    + '<path d="M8.5 6.5h7"/>',
+  busLine:
+    '<rect x="4" y="4.5" width="16" height="11" rx="2"/><path d="M4 10h16"/>'
+    + '<path d="M7.5 13h2M14.5 13h2"/><circle cx="8" cy="18.5" r="1.6"/><circle cx="16" cy="18.5" r="1.6"/>',
+  school:
+    '<path d="M12 3 21 7.5 12 12 3 7.5z"/><path d="M6.5 10v6.5c0 1.7 2.5 3 5.5 3s5.5-1.3 5.5-3V10"/>'
+    + '<path d="M21 7.5v5"/>',
+  fireStation:
+    '<path d="M3.5 20.5h17"/><path d="M5 20.5V9.5h14v11"/><path d="M5 9.5 12 4l7 5.5"/>'
+    + '<path d="M12 18.5c-1.8 0-3-1.2-3-2.9 0-2 2-2.4 2-4.6 1.6.8 4 2.6 4 4.6 0 1.7-1.2 2.9-3 2.9z"/>',
+  policeStation:
+    '<path d="M12 3.2 19.5 6v6c0 4-3.2 7.2-7.5 8.8C7.7 19.2 4.5 16 4.5 12V6z"/>'
+    + '<path d="M12 8.2 13.2 11h2.9l-2.4 1.9.9 2.9-2.6-1.8-2.6 1.8.9-2.9L7.9 11h2.9z"/>',
   bulldoze:
     '<path d="M4 7h16"/><path d="M9.8 7V4.5h4.4V7"/><path d="M6.6 7l1 13h8.8l1-13"/>',
 
@@ -70,6 +85,18 @@ const ICONS = {
     + '<circle cx="7.6" cy="18.4" r="1.5"/><circle cx="16.4" cy="18.4" r="1.5"/>',
   overlayPower:
     '<path fill="currentColor" stroke="none" d="M13.6 2 6 13.6h4.4L9.2 22 18 10.4h-4.6z"/>',
+  overlayCrime:
+    '<path d="M12 3.2 19.5 6v6c0 4-3.2 7.2-7.5 8.8C7.7 19.2 4.5 16 4.5 12V6z"/>'
+    + '<path d="M9.4 11.6a2.6 2.6 0 0 1 5.2 0"/><path d="M12 14.2v2"/>',
+  overlayServices:
+    '<path d="M3.5 5.5h17v13h-17z"/><path d="M12 8.5v7M8.5 12h7"/>',
+  // A city hall rather than a school: this window is the school, the fire
+  // brigade and the police together, and reusing the school's own icon for it
+  // made the two buttons on the bar impossible to tell apart.
+  winServices:
+    '<path d="M3.5 20.5h17"/><path d="M5.5 20.5V10.5h13v10"/><path d="M4 10.5 12 6l8 4.5"/>'
+    + '<path d="M12 6V2.8"/><path d="M12 3.2h4.5l-1.2 1.3 1.2 1.3H12"/>'
+    + '<path d="M9.5 20.5v-4.5h5v4.5"/>',
   overlayNoise:
     '<path d="M4.5 14.5v-5H8l4.5-4v13L8 14.5z"/><path d="M15.8 9.4a4 4 0 0 1 0 5.2M18.4 7a7.6 7.6 0 0 1 0 10"/>',
   overlayLandValue:

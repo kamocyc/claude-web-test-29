@@ -1,4 +1,4 @@
-import { MAP_SIZE, STARTING_PANTRY } from '../config';
+import { CAR_OWNERSHIP, MAP_SIZE, STARTING_EDUCATION, STARTING_PANTRY } from '../config';
 import { hashToUnit, type Rng } from '../core/rng';
 import {
   CitizenState,
@@ -7,6 +7,7 @@ import {
   type CitizenId,
   type TileIndex,
   type TrainId,
+  type BusId,
 } from '../core/types';
 import { CAR_PROFILE, type FollowingProfile } from './carFollowing';
 import type { RideLeg } from './transitPlanner';
@@ -30,6 +31,15 @@ export interface Citizen {
 
   state: CitizenState;
   mode: TravelMode;
+  /**
+   * Whether this household has a car.
+   *
+   * Fixed when they arrive and never revisited: it is the one fact that makes
+   * somebody a transit rider rather than a driver, and a citizen who bought a
+   * car half way through a trip would be a very strange thing to watch.
+   */
+  hasCar: boolean;
+
   /**
    * How this citizen behaves when driving. Always the car profile -- walking
    * is handled by the mode, not by a second profile -- but it is a field
@@ -98,14 +108,29 @@ export interface Citizen {
   ride: RideLeg | null;
   /** Walking path from the alighting station to the door, held during the ride. */
   legAfterRide: TileIndex[] | null;
-  /** Train currently aboard, or -1. */
-  boardedTrain: TrainId;
+  /**
+   * The train or bus currently aboard, or -1.
+   *
+   * Which array the id belongs to is decided by the line being ridden
+   * (`ride.line`), not by a second field: a rider knows they are on the 3号線,
+   * and whether that is rails or roads is the line's business rather than
+   * theirs.
+   */
+  boardedVehicle: TrainId | BusId;
   /** Tick the citizen reached the platform, for the "waited N min" readout. */
   waitStartTick: number;
   /** How long the last boarding actually took, kept for the trip statistics. */
   lastWaitTicks: number;
 
   // --- Wellbeing -----------------------------------------------------------
+
+  /**
+   * 0..100. Rises while this citizen's home is within reach of a working
+   * school, and never falls: what somebody was taught they keep. It pays the
+   * city back through wages, which is what makes a school an investment
+   * rather than an ornament.
+   */
+  education: number;
 
   /** 0..100, or -1 before the first evaluation. Smoothed, not instantaneous. */
   happiness: number;
@@ -179,7 +204,9 @@ export function createCitizen(
     retryAtTick: 0,
     ride: null,
     legAfterRide: null,
-    boardedTrain: -1,
+    boardedVehicle: -1,
+    education: STARTING_EDUCATION,
+    hasCar: rng.next() < CAR_OWNERSHIP,
     waitStartTick: 0,
     lastWaitTicks: 0,
     happiness: -1,

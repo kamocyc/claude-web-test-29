@@ -14,6 +14,7 @@ import { tileCenterX, tileCenterY } from './citizen';
 import type { Crossings } from './crossings';
 import type { Occupancy } from './occupancy';
 import type { Signals } from './signals';
+import { findPath } from './pathfinding';
 import { occupantSize, type RoadAgent } from './vehicle';
 
 /** Index of the last road tile on the route; beyond it the agent walks. */
@@ -282,6 +283,38 @@ export function setPositionFromPath(c: RoadAgent): void {
   const by = tileCenterY(path[seg + 1]);
   c.x = ax + (bx - ax) * t;
   c.y = ay + (by - ay) * t;
+}
+
+/**
+ * A door-to-door route from wherever a vehicle is standing to a building.
+ *
+ * Every road vehicle in the sim needs this and needs it to mean the same
+ * thing: start from the tile actually under the vehicle (a yard, a stop, or
+ * the road it is on), drive the roads, finish on the destination's own tile.
+ * Lorries re-plan from where they stand rather than from their depot because
+ * the interesting case is a road cut *under* them -- what matters is whether
+ * there is a way on from here -- and that is just as true of a fire engine
+ * and of a bus. The caller refreshes the destination's access road first:
+ * only it knows whether the building is still supposed to be there.
+ */
+export function routeToBuilding(
+  world: World,
+  x: number,
+  y: number,
+  to: { tile: TileIndex; accessRoad: TileIndex },
+): TileIndex[] | null {
+  const here = world.map.at(Math.floor(x), Math.floor(y));
+  if (here < 0) return null;
+  const from = world.map.isRoad(here) ? here : world.adjacentRoad(here);
+  if (from < 0) return null;
+  if (to.accessRoad < 0) return null;
+
+  const roads = findPath(world.roads, from, to.accessRoad);
+  if (!roads) return null;
+  // Start from the yard the vehicle is actually standing in, so it drives out
+  // of the gate rather than appearing on the road outside it.
+  const yard = world.map.isRoad(here) ? [] : [here];
+  return [...yard, ...roads, to.tile];
 }
 
 /** True when the route no longer exists, e.g. the player bulldozed it. */

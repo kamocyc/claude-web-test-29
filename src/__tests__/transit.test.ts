@@ -121,9 +121,9 @@ describe('line layout', () => {
   it('spaces its trains evenly around the route', () => {
     const w = flatWorld();
     const line = createLine(w, railCorridor(w, [10, 40]))!;
-    expect(line.trains).toHaveLength(TRAINS_PER_LINE);
+    expect(line.vehicles).toHaveLength(TRAINS_PER_LINE);
 
-    const positions = line.trains.map((id) => w.trains[id].s).sort((a, b) => a - b);
+    const positions = line.vehicles.map((id) => w.trains[id].s).sort((a, b) => a - b);
     const lap = line.route.length - 1;
     positions.forEach((s, i) => {
       expect(s).toBeCloseTo((lap * i) / TRAINS_PER_LINE);
@@ -161,7 +161,7 @@ describe('ride time', () => {
     const line = createLine(w, railCorridor(w, [10, 40]))!;
     const full = expectedWaitTicks(line);
 
-    line.trains = line.trains.slice(0, 1);
+    line.vehicles = line.vehicles.slice(0, 1);
     const single = expectedWaitTicks(line);
     expect(full).toBeCloseTo(single / TRAINS_PER_LINE);
 

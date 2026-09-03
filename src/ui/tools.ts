@@ -1,5 +1,6 @@
 import { COLORS } from '../render/palette';
-import { Zone, type TileIndex } from '../core/types';
+import { BuildingType, Zone, type TileIndex } from '../core/types';
+import { LineMode } from '../world/transit';
 import type { IconName } from './icons';
 import { Expense, type Economy } from '../sim/economy';
 import type { World } from '../world/world';
@@ -11,7 +12,12 @@ export const enum Tool {
   Rail = 'rail',
   Station = 'station',
   Line = 'line',
+  BusStop = 'busStop',
+  BusLine = 'busLine',
   Power = 'power',
+  School = 'school',
+  FireStation = 'fireStation',
+  PoliceStation = 'policeStation',
   Bulldoze = 'bulldoze',
   ResidentialLow = 'residentialLow',
   ResidentialHigh = 'residentialHigh',
@@ -51,7 +57,14 @@ export function zoneOf(tool: Tool): Zone | null {
 }
 
 /** Which cluster of the one-row toolbar a tool sits in. */
-export type ToolGroup = 'select' | 'road' | 'rail' | 'zone' | 'other' | 'bulldoze';
+export type ToolGroup =
+  | 'select'
+  | 'road'
+  | 'rail'
+  | 'bus'
+  | 'zone'
+  | 'civic'
+  | 'bulldoze';
 
 export interface ToolInfo {
   tool: Tool;
@@ -77,6 +90,9 @@ export const TOOL_LABELS: ReadonlyArray<ToolInfo> = [
   { tool: Tool.Rail, label: '線路', key: '3', group: 'rail', icon: 'rail' },
   { tool: Tool.Station, label: '駅', key: '4', group: 'rail', icon: 'station' },
   { tool: Tool.Line, label: '路線', key: '5', group: 'rail', icon: 'line' },
+
+  { tool: Tool.BusStop, label: 'バス停', key: '8', group: 'bus', icon: 'busStop' },
+  { tool: Tool.BusLine, label: 'バス系統', key: '9', group: 'bus', icon: 'busLine' },
 
   {
     tool: Tool.ResidentialLow, label: '低密度住宅', key: 'q', group: 'zone',
@@ -115,7 +131,10 @@ export const TOOL_LABELS: ReadonlyArray<ToolInfo> = [
     icon: 'zoneMine', swatch: COLORS.mining,
   },
 
-  { tool: Tool.Power, label: '発電所', key: '6', group: 'other', icon: 'powerPlant' },
+  { tool: Tool.Power, label: '発電所', key: '6', group: 'civic', icon: 'powerPlant' },
+  { tool: Tool.School, label: '学校', key: 'g', group: 'civic', icon: 'school' },
+  { tool: Tool.FireStation, label: '消防署', key: 'h', group: 'civic', icon: 'fireStation' },
+  { tool: Tool.PoliceStation, label: '警察署', key: 'j', group: 'civic', icon: 'policeStation' },
 
   { tool: Tool.Bulldoze, label: '撤去', key: '7', group: 'bulldoze', icon: 'bulldoze' },
 ];
@@ -123,6 +142,13 @@ export const TOOL_LABELS: ReadonlyArray<ToolInfo> = [
 export const TOOL_BY_KEY: Readonly<Record<string, Tool>> = Object.fromEntries(
   TOOL_LABELS.filter((t) => t.key !== '').map(({ tool, key }) => [key, tool]),
 );
+
+/** The two tools that pick stops on the map instead of building on a tile. */
+export function lineToolFor(tool: Tool): LineMode | null {
+  if (tool === Tool.Line) return LineMode.Rail;
+  if (tool === Tool.BusLine) return LineMode.Road;
+  return null;
+}
 
 /** Tools that paint continuously while the mouse is dragged. */
 export function isDragTool(tool: Tool): boolean {
@@ -139,14 +165,32 @@ export function expenseOf(tool: Tool): Expense | null {
       return Expense.Rail;
     case Tool.Station:
       return Expense.Station;
+    case Tool.BusStop:
+      return Expense.BusStop;
     case Tool.Power:
       return Expense.PowerPlant;
+    case Tool.School:
+      return Expense.School;
+    case Tool.FireStation:
+      return Expense.FireStation;
+    case Tool.PoliceStation:
+      return Expense.PoliceStation;
     case Tool.Bulldoze:
       return Expense.Bulldoze;
     default:
       return zoneOf(tool) !== null ? Expense.Zone : null;
   }
 }
+
+/** Which building each civic tool puts up. */
+const SERVICE_BUILDINGS: Record<
+  Tool.School | Tool.FireStation | Tool.PoliceStation,
+  BuildingType
+> = {
+  [Tool.School]: BuildingType.School,
+  [Tool.FireStation]: BuildingType.FireStation,
+  [Tool.PoliceStation]: BuildingType.PoliceStation,
+};
 
 export interface ToolResult {
   applied: boolean;
@@ -195,6 +239,12 @@ export function applyTool(
       economy.charge(Expense.Station);
       return { applied: true };
     }
+    case Tool.BusStop: {
+      const built = world.placeBusStop(tile) !== null;
+      if (!built) return { applied: false, message: 'バス停は道路に接する空きタイルに置けます' };
+      economy.charge(Expense.BusStop);
+      return { applied: true };
+    }
     case Tool.Power: {
       const built = world.placePowerPlant(tile) !== null;
       if (!built) {
@@ -203,10 +253,19 @@ export function applyTool(
       economy.charge(Expense.PowerPlant);
       return { applied: true };
     }
+    case Tool.School:
+    case Tool.FireStation:
+    case Tool.PoliceStation: {
+      const built = world.placeService(tile, SERVICE_BUILDINGS[tool]) !== null;
+      if (!built) return { applied: false, message: '道路に接する空きタイルにしか置けません' };
+      economy.charge(expense as Expense);
+      return { applied: true };
+    }
     case Tool.Bulldoze:
       return charged(world.bulldoze(tile), economy, Expense.Bulldoze);
     case Tool.Select:
     case Tool.Line:
+    case Tool.BusLine:
       return { applied: false };
     default:
       return { applied: false };

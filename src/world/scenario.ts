@@ -1,5 +1,5 @@
 import { idx, manhattan, tileX, tileY } from '../core/grid';
-import { Resource, Zone, type BuildingId, type TileIndex } from '../core/types';
+import { BuildingType, Resource, Zone, type BuildingId, type TileIndex } from '../core/types';
 import { findPath } from '../sim/pathfinding';
 import { createLine } from './lineBuilder';
 import { World } from './world';
@@ -104,7 +104,36 @@ export function seedStartingTown(world: World): void {
     world.placePowerPlant(idx(east.x + east.w + 2, y));
   }
 
+  seedCivicServices(world, west, top);
+
   seedPrimaryIndustry(world);
+}
+
+/**
+ * One school, one fire station and one police station, in the middle of the
+ * housing where a small town would actually have put them.
+ *
+ * The town starts with the civic minimum rather than with nothing, for the
+ * same reason it starts with two power plants: the opening city has to be a
+ * *working* one that is visibly running out of headroom, not a ruin. Each of
+ * these reaches a couple of dozen blocks along the roads, so the district the
+ * player grows next is out of range of all three -- which is the lesson, and
+ * it is a much better one than watching the starting town burn.
+ */
+function seedCivicServices(world: World, west: { x: number; w: number }, top: number): void {
+  const spots: Array<[TileIndex, BuildingType]> = [
+    [idx(west.x + 3, top + 8), BuildingType.School],
+    [idx(west.x + 3, top + 23), BuildingType.FireStation],
+    [idx(west.x + 13, top + 13), BuildingType.PoliceStation],
+  ];
+  for (const [tile, type] of spots) {
+    if (world.placeService(tile, type)) continue;
+    // The 5-tile street grid puts a road on every fifth row and column, so a
+    // tile that is already spoken for has a free neighbour next to it.
+    for (const dx of [1, -1, 2, -2]) {
+      if (world.placeService(tile + dx, type)) break;
+    }
+  }
 }
 
 /**

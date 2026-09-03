@@ -18,7 +18,7 @@ import { industryOf, operatingRatio, specFor, type Building } from '../world/bui
 import type { World } from '../world/world';
 import { tileCenterX, tileCenterY } from './citizen';
 import { CargoKind, createLorry, isSpare, LorryState, type Lorry } from './lorry';
-import { advanceVehicle, pathIsBroken, setPositionFromPath } from './movement';
+import { advanceVehicle, pathIsBroken, routeToBuilding, setPositionFromPath } from './movement';
 import { findPath, type PathCache } from './pathfinding';
 import type { Crossings } from './crossings';
 import type { Occupancy } from './occupancy';
@@ -484,37 +484,24 @@ export class Freight {
     lorry.v = 0;
   }
 
-  /**
-   * A route from where the lorry is standing to a building's door.
-   *
-   * Lorries re-plan from their current tile rather than from their depot,
-   * because the interesting case is a road cut *under* them: what matters is
-   * whether there is a way on from here.
-   */
+  /** Where the lorry is now, to a building's door. Shared with every other
+   *  road vehicle, so a lorry, a bus and a fire engine leave a yard alike. */
   private routeBetween(world: World, x: number, y: number, to: Building): TileIndex[] | null {
-    const here = world.map.at(Math.floor(x), Math.floor(y));
-    const from = world.map.isRoad(here) ? here : world.adjacentRoad(here);
     world.refreshAccess(to);
-    if (from < 0 || to.accessRoad < 0) return null;
-
-    const roads = findPath(world.roads, from, to.accessRoad);
-    if (!roads) return null;
-    // Start from the yard the lorry is actually standing in, so it drives out
-    // of the gate rather than appearing on the road outside it.
-    const yard = world.map.isRoad(here) ? [] : [here];
-    return [...yard, ...roads, to.tile];
+    return routeToBuilding(world, x, y, to);
   }
 
   /** A lorry whose depot or destination was demolished under it. */
   rescueOrphaned(world: World, tick: number): void {
     for (const lorry of world.lorries) {
-      if (lorry.state === LorryState.Idle) continue;
-
       const depot = world.buildings[lorry.home];
-      if (!depot || !depot.alive) {
+      if (lorry.home >= 0 && (!depot || !depot.alive)) {
+        // Including the ones parked in it: a lorry left pointing at a
+        // demolished yard is a slot the fleet can never hand out again.
         this.retire(lorry);
         continue;
       }
+      if (lorry.state === LorryState.Idle) continue;
       if (lorry.destination < 0) continue;
       const consumer = world.buildings[lorry.destination];
       if (consumer && consumer.alive) continue;

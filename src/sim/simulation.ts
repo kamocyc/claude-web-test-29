@@ -1,6 +1,7 @@
 import {
   CAR_FREE_SPEED,
   CHAIN_INTERVAL_MINUTES,
+  EMERGENCY_INTERVAL_MINUTES,
   FIELD_INTERVAL_MINUTES,
   FREIGHT_INTERVAL_MINUTES,
   GROWTH_INTERVAL_MINUTES,
@@ -12,6 +13,7 @@ import {
   SHOPPING_TRIGGER,
   SHOPPING_WINDOW_MINUTES,
   SHOP_CLOSE_MINUTE,
+  SERVICES_INTERVAL_MINUTES,
   SHOP_OPEN_MINUTE,
   WALK_DISTANCE_THRESHOLD,
   WALK_SPEED,
@@ -25,6 +27,7 @@ import {
   isTravelling,
   TravelMode,
   type BuildingId,
+  type TileIndex,
 } from '../core/types';
 import { growCity } from '../world/zoning';
 import type { World } from '../world/world';
@@ -41,6 +44,11 @@ import { SupplyChain } from './goods';
 import { NoiseField } from './noise';
 import { LandValueField } from './landValue';
 import { Happiness } from './happiness';
+import { Services } from './services';
+import { CrimeField } from './crime';
+import { Emergency } from './emergency';
+import { forEachDrivingBus, stepBuses } from './buses';
+import { educate } from './education';
 import {
   departForHomeMinute,
   departForWorkMinute,
@@ -49,7 +57,8 @@ import {
 } from './schedule';
 import { buy, chooseShop } from './shopping';
 import { findPath, PathCache } from './pathfinding';
-import { advanceTrain, carryPassengers } from './trains';
+import { carryPassengers } from './boarding';
+import { advanceTrain } from './trains';
 import { planTransit, transitWins } from './transitPlanner';
 import { TrafficMemory } from './trafficMemory';
 
@@ -73,6 +82,9 @@ export class Simulation {
   readonly noise = new NoiseField();
   readonly landValue = new LandValueField();
   readonly happiness = new Happiness();
+  readonly services = new Services();
+  readonly crime = new CrimeField();
+  readonly emergency = new Emergency();
 
   strandedCount = 0;
 
@@ -90,6 +102,8 @@ export class Simulation {
   lastFieldBucket = -1;
   lastMigrationBucket = -1;
   lastFreightBucket = -1;
+  lastServicesBucket = -1;
+  lastEmergencyBucket = -1;
   lastSettledDay = -1;
 
   constructor(readonly world: World) {}
@@ -116,6 +130,13 @@ export class Simulation {
     const minute = this.clock.minuteOfDay;
 
     for (const c of this.world.citizens) {
+      // Somebody who has already given up their home -- burnt out with
+      // nowhere to move to -- is not setting off for work. They are removed
+      // at the next migration pass; until then they simply stay indoors,
+      // rather than trying to travel from an address that no longer exists
+      // and stranding themselves in the street.
+      if (c.left) continue;
+
       switch (c.state) {
         case CitizenState.AtHome:
           if (c.work >= 0
@@ -186,7 +207,7 @@ export class Simulation {
     c.signalHold = -1;
     c.ride = null;
     c.legAfterRide = null;
-    c.boardedTrain = -1;
+    c.boardedVehicle = -1;
     c.lastWaitTicks = 0;
     c.tripStartTick = this.clock.tick;
     this.requestRoute(c);
@@ -255,19 +276,21 @@ export class Simulation {
     );
 
     const doorToDoor = roadPath ? [from.tile, ...roadPath, to.tile] : null;
-    const surfaceMode = manhattan(from.tile, to.tile) > WALK_DISTANCE_THRESHOLD
+    // Somebody with no car walks, however far it is -- which is exactly the
+    // person a bus route is for.
+    const surfaceMode = c.hasCar && manhattan(from.tile, to.tile) > WALK_DISTANCE_THRESHOLD
       ? TravelMode.Car
       : TravelMode.Walk;
 
-    // Compare the train against driving at free flow. Both estimates ignore
-    // congestion, which keeps the comparison fair and means a citizen can
-    // still choose the road and then get stuck in the jam the player built --
-    // exactly the situation worth watching.
+    // Compare transit against whatever this citizen would otherwise actually
+    // do. Driving is priced at remembered congestion and walking at walking
+    // pace: comparing a walker's options against a car they do not own was
+    // what made every bus route in the city run empty.
     if (world.activeLines.length > 0) {
       const plan = planTransit(world, from, to);
-      const carTicks = doorToDoor ? this.traffic.driveTicks(doorToDoor) : Infinity;
+      const surfaceTicks = surfaceTravelTicks(this.traffic, surfaceMode, doorToDoor);
 
-      if (plan && transitWins(plan.totalTicks, carTicks)) {
+      if (plan && transitWins(plan.totalTicks, surfaceTicks)) {
         c.mode = TravelMode.Transit;
         c.ride = plan.ride;
         c.legAfterRide = plan.fromStation;
@@ -299,7 +322,7 @@ export class Simulation {
     c.v = 0;
     c.ride = null;
     c.legAfterRide = null;
-    c.boardedTrain = -1;
+    c.boardedVehicle = -1;
     c.retryAtTick = this.clock.tick + STRANDED_RETRY_TICKS;
     const home = this.world.buildings[c.home];
     if (home) {
@@ -325,6 +348,15 @@ export class Simulation {
     }
     this.freight.forEachDriving(this.world, (lorry) => {
       registerVehicle(this.world, this.occupancy, lorry);
+    });
+    // Buses and emergency vehicles are road users like any other: they are in
+    // the same snapshot, so a car queues behind a bus at a stop and a fire
+    // engine has to get through the jam rather than around it.
+    forEachDrivingBus(this.world, (bus) => {
+      registerVehicle(this.world, this.occupancy, bus);
+    });
+    this.emergency.forEachDriving(this.world, (unit) => {
+      registerVehicle(this.world, this.occupancy, unit);
     });
 
     let stranded = 0;
@@ -368,6 +400,15 @@ export class Simulation {
       this.signals,
       this.clock.tick,
     );
+    stepBuses(this.world, this.occupancy, this.crossings, this.signals, this.clock.tick);
+    this.emergency.step(
+      this.world,
+      this.crime,
+      this.occupancy,
+      this.crossings,
+      this.signals,
+      this.clock.tick,
+    );
     this.traffic.update(this.occupancy);
   }
 
@@ -378,7 +419,7 @@ export class Simulation {
   private finishLeg(c: Citizen): void {
     c.path = null;
     c.v = 0;
-    if (c.ride && c.boardedTrain < 0) {
+    if (c.ride && c.boardedVehicle < 0) {
       c.state = CitizenState.Waiting;
       c.waitStartTick = this.clock.tick;
       return;
@@ -446,14 +487,28 @@ export class Simulation {
     if (this.due('lastFreightBucket', minute, FREIGHT_INTERVAL_MINUTES)) {
       this.freight.dispatch(this.world, this.pathCache, this.traffic, this.clock.tick);
     }
+    if (this.due('lastServicesBucket', minute, SERVICES_INTERVAL_MINUTES)) {
+      this.services.update(this.world);
+    }
+    if (this.due('lastEmergencyBucket', minute, EMERGENCY_INTERVAL_MINUTES)) {
+      this.emergency.spawn(this.world, this.crime, this.services, this.clock.tick);
+      this.emergency.dispatch(this.world);
+    }
     if (this.due('lastFieldBucket', minute, FIELD_INTERVAL_MINUTES)) {
       this.noise.update(this.world);
-      this.landValue.update(this.world, this.noise);
+      // Crime is priced off yesterday's land value and then charged against
+      // today's, which is the loop the player plays against: a cheap district
+      // gets the crime, and the crime keeps it cheap until a police station
+      // breaks the cycle.
+      this.crime.update(this.world, this.landValue);
+      this.landValue.update(this.world, this.noise, this.crime);
+      educate(this.world, this.services);
       this.happiness.update(
         this.world,
         this.landValue,
         this.noise,
-        this.chain.serviceLevel(this.world),
+        this.crime,
+        this.services,
         this.economy,
         this.clock.tick,
       );
@@ -470,6 +525,7 @@ export class Simulation {
       if (this.lastSettledDay >= 0) {
         this.economy.settleDay(this.world);
         this.freight.endDay();
+        this.emergency.endDay();
       }
       this.lastSettledDay = this.clock.day;
     }
@@ -478,7 +534,8 @@ export class Simulation {
   /** True once per bucket of `everyMinutes`, remembering the last one seen. */
   private due(
     field: 'lastPowerBucket' | 'lastChainBucket' | 'lastFieldBucket'
-      | 'lastMigrationBucket' | 'lastGrowthBucket' | 'lastFreightBucket',
+      | 'lastMigrationBucket' | 'lastGrowthBucket' | 'lastFreightBucket'
+      | 'lastServicesBucket' | 'lastEmergencyBucket',
     minute: number,
     everyMinutes: number,
   ): boolean {
@@ -508,6 +565,23 @@ export class Simulation {
   }
 }
 
+
+/**
+ * How long the trip takes without transit: the thing a ride has to beat.
+ *
+ * Driving is priced at remembered speeds so a jam really does push people onto
+ * the buses; walking is priced at walking pace, which is what makes a stop
+ * outside the front door worth having.
+ */
+function surfaceTravelTicks(
+  traffic: TrafficMemory,
+  mode: TravelMode,
+  path: TileIndex[] | null,
+): number {
+  if (!path) return Infinity;
+  if (mode === TravelMode.Car) return traffic.driveTicks(path);
+  return (path.length - 1) / WALK_SPEED;
+}
 
 /** Assume the citizen gets back up to free-flow if currently stopped. */
 function speedFloor(c: Citizen): number {

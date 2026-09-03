@@ -5,11 +5,13 @@ import {
   MAX_DEBT,
   OVERDRAFT_INTEREST_PER_DAY,
   STARTING_FUNDS,
+  EDUCATION_WAGE_BONUS,
   TAX_RATE_LIMITS,
   UPKEEP_PER_RAIL_TILE,
   UPKEEP_PER_ROAD_TILE,
 } from '../config';
 import { Industry } from '../core/types';
+import { workforceEducation } from './education';
 import { industryOf, isWorkplace, specFor } from '../world/buildings';
 import type { World } from '../world/world';
 
@@ -21,6 +23,10 @@ export const enum Expense {
   Station = 'station',
   PowerPlant = 'powerPlant',
   Bulldoze = 'bulldoze',
+  BusStop = 'busStop',
+  School = 'school',
+  FireStation = 'fireStation',
+  PoliceStation = 'policeStation',
 }
 
 /** Tax is levied per category, because that is the lever the player has. */
@@ -147,7 +153,13 @@ export class Economy {
         // Wages are per person actually employed, and are only paid where the
         // lights are on. Scaling them by staffing as well would count the same
         // shortfall twice, since the head count is already the head count.
-        const wages = b.powered ? spec.wagePerJob * b.occupants.length : 0;
+        //
+        // What an educated workforce is worth is folded in here rather than
+        // anywhere else, because a wage is the only place education has ever
+        // meant anything: a city that builds schools produces more per job
+        // and taxes the difference, which is what pays the schools back.
+        const skill = 1 + EDUCATION_WAGE_BONUS * (workforceEducation(world, b.occupants) / 100);
+        const wages = b.powered ? spec.wagePerJob * b.occupants.length * skill : 0;
         switch (industryOf(b.type)) {
           case Industry.Retail:
             // Shops are taxed on turnover, so an empty shop pays nothing.

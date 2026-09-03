@@ -1,9 +1,9 @@
 import { TRAIN_DWELL_TICKS, TRAIN_FREE_SPEED } from '../config';
-import { CitizenState, type CitizenId } from '../core/types';
-import { trainHasRoom, type TransitLine, type Train } from '../world/transit';
+import { type TransitLine, type Train } from '../world/transit';
 import type { World } from '../world/world';
+import { serveStop } from './boarding';
 import { desiredSpeed, stepSpeed, TRAIN_PROFILE } from './carFollowing';
-import { tileCenterX, tileCenterY, type Citizen } from './citizen';
+import { tileCenterX, tileCenterY } from './citizen';
 
 /**
  * Trains run the same following model as cars, with the train profile, so they
@@ -64,7 +64,7 @@ function distanceToNextStop(line: TransitLine, train: Train, lap: number): numbe
 /** The train ahead on the same line, wrapping round the route. */
 function gapToTrainAhead(world: World, line: TransitLine, train: Train, lap: number): number {
   let best = Infinity;
-  for (const id of line.trains) {
+  for (const id of line.vehicles) {
     if (id === train.id) continue;
     const other = world.trains[id];
     if (!other) continue;
@@ -80,80 +80,8 @@ function arriveAtStop(world: World, line: TransitLine, train: Train, tick: numbe
   train.v = 0;
   train.dwellUntil = tick + TRAIN_DWELL_TICKS;
 
-  const station = line.stopStation[train.nextStop];
-  alight(world, line, train, station);
-  board(world, line, train, station, tick);
-
+  serveStop(world, line, train, line.stopStation[train.nextStop], tick);
   train.nextStop = (train.nextStop + 1) % line.stopAt.length;
-}
-
-function alight(world: World, line: TransitLine, train: Train, station: number): void {
-  const staying: CitizenId[] = [];
-  for (const id of train.passengers) {
-    const c = world.citizens[id];
-    if (!c) continue;
-    if (c.ride && c.ride.alightStation === station) {
-      dropOff(world, c, station);
-      line.ridership++;
-    } else {
-      staying.push(id);
-    }
-  }
-  train.passengers = staying;
-}
-
-function dropOff(world: World, c: Citizen, station: number): void {
-  const stop = world.buildings[station];
-  c.ride = null;
-  c.boardedTrain = -1;
-  // Back on foot for the last leg, which was planned when the trip started.
-  c.path = c.legAfterRide;
-  c.legAfterRide = null;
-  c.s = 0;
-  c.v = 0;
-  // Back to whichever journey this was; the ride was only ever the middle of it.
-  c.state = c.legState;
-  if (stop) {
-    c.x = tileCenterX(stop.tile);
-    c.y = tileCenterY(stop.tile);
-    c.prevX = c.x;
-    c.prevY = c.y;
-  }
-}
-
-function board(
-  world: World,
-  line: TransitLine,
-  train: Train,
-  station: number,
-  tick: number,
-): void {
-  for (const c of world.citizens) {
-    if (!trainHasRoom(train)) return;
-    if (c.state !== CitizenState.Waiting || !c.ride) continue;
-    if (c.ride.line !== line.id || c.ride.boardStation !== station) continue;
-    // Only board a train that will actually reach the alighting stop before
-    // turning back; on an out-and-back route the wrong direction arrives first.
-    if (!servesFrom(line, train.nextStop, c.ride.alightStop)) continue;
-
-    train.passengers.push(c.id);
-    c.boardedTrain = train.id;
-    c.state = CitizenState.Riding;
-    c.lastWaitTicks = Math.max(0, tick - c.waitStartTick);
-    c.waitStartTick = 0;
-  }
-}
-
-/**
- * Whether a train currently at stop index `at` reaches `target` before it
- * comes back round to `at` again.
- */
-function servesFrom(line: TransitLine, at: number, target: number): boolean {
-  const n = line.stopAt.length;
-  for (let i = 1; i <= n; i++) {
-    if ((at + i) % n === target) return true;
-  }
-  return false;
 }
 
 export function setTrainPosition(line: TransitLine, train: Train): void {
@@ -165,16 +93,4 @@ export function setTrainPosition(line: TransitLine, train: Train): void {
   const by = tileCenterY(line.route[seg + 1]);
   train.x = ax + (bx - ax) * t;
   train.y = ay + (by - ay) * t;
-}
-
-/** Riders are carried by the train, so their position is simply its position. */
-export function carryPassengers(world: World, train: Train): void {
-  for (const id of train.passengers) {
-    const c = world.citizens[id];
-    if (!c) continue;
-    c.prevX = c.x;
-    c.prevY = c.y;
-    c.x = train.x;
-    c.y = train.y;
-  }
 }

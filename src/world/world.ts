@@ -1,8 +1,9 @@
-import { MAP_SIZE, TRAINS_PER_LINE } from '../config';
+import { MAP_SIZE } from '../config';
 import { idx, neighbors } from '../core/grid';
 import { Rng } from '../core/rng';
 import {
   BuildingType,
+  CitizenState,
   Resource,
   Terrain,
   Zone,
@@ -10,13 +11,30 @@ import {
   type LineId,
   type TileIndex,
 } from '../core/types';
-import type { Citizen } from '../sim/citizen';
-import { capacityFor, isHome, isWorkplace, specFor, type Building } from './buildings';
+import { tileCenterX, tileCenterY, type Citizen } from '../sim/citizen';
+import {
+  capacityFor,
+  isEmergencyStation,
+  isHome,
+  isTransitStop,
+  isWorkplace,
+  specFor,
+  type Building,
+} from './buildings';
 import { groundSupports } from './zoneRules';
 import { TileMap } from './tileMap';
 import { TileNetwork } from './tileNetwork';
 import type { Lorry } from '../sim/lorry';
-import { LINE_COLORS, type TransitLine, type Train } from './transit';
+import { BUS_ID_BASE, createBus, type Bus } from '../sim/bus';
+import { UnitState, type EmergencyUnit } from '../sim/emergency';
+import { layoutRoadRoute } from './lineBuilder';
+import {
+  LINE_COLORS,
+  LineMode,
+  specForMode,
+  type TransitLine,
+  type Train,
+} from './transit';
 
 export class World {
   readonly map = new TileMap();
@@ -32,6 +50,15 @@ export class World {
    * what lets a lorry's id stay stable without any renumbering pass.
    */
   readonly lorries: Lorry[] = [];
+  /**
+   * The buses. Like the lorries and unlike the citizens, this array is never
+   * compacted: a bus whose route was withdrawn keeps its slot and the next
+   * line reuses it, so a bus id stays meaningful for as long as anybody is
+   * holding one.
+   */
+  readonly buses: Bus[] = [];
+  /** Fire engines and patrol cars, kept the same way for the same reason. */
+  readonly units: EmergencyUnit[] = [];
   readonly rng: Rng;
 
   /** Bumped whenever buildings or lines appear or vanish, so UI can refresh. */
@@ -200,6 +227,32 @@ export class World {
     return b;
   }
 
+  /**
+   * A bus stop: a shelter beside the road the buses call at.
+   *
+   * It needs nothing but a road to stand next to -- no track, no platform,
+   * no clear route to anywhere. That is the whole point of a bus: the network
+   * it runs on is the one the city already has.
+   */
+  placeBusStop(tile: TileIndex): Building | null {
+    if (tile < 0 || !this.map.isBuildable(tile)) return null;
+    if (this.adjacentRoad(tile) < 0) return null;
+    return this.addBuilding(tile, BuildingType.BusStop);
+  }
+
+  /**
+   * A civic service: a school, a fire station or a police station.
+   *
+   * Placed like a power plant rather than zoned, because these are the city's
+   * own buildings: demand never asks for one and never abandons one, and the
+   * city pays their upkeep every day whether or not anybody notices them.
+   */
+  placeService(tile: TileIndex, type: BuildingType): Building | null {
+    if (tile < 0 || !this.map.isBuildable(tile)) return null;
+    if (this.adjacentRoad(tile) < 0) return null;
+    return this.addBuilding(tile, type);
+  }
+
   /** Take a track tile back up. The inverse of `placeRail`. */
   removeRail(tile: TileIndex): boolean {
     if (tile < 0 || this.map.rail[tile] !== 1) return false;
@@ -221,6 +274,7 @@ export class World {
     if (this.map.road[tile] === 1) {
       this.map.road[tile] = 0;
       this.roads.update(tile);
+      this.repairRoadLines(tile);
       changed = true;
     }
     if (this.map.rail[tile] === 1) {
@@ -291,6 +345,7 @@ export class World {
     if (!b || !b.alive) return;
 
     this.map.building[b.tile] = -1;
+    const wasHome = isHome(b.type);
     for (const cid of b.occupants) {
       const c = this.citizens[cid];
       if (!c) continue;
@@ -298,12 +353,58 @@ export class World {
       // Losing your workplace makes you jobless, not stuck travelling to a
       // building that is no longer there.
       if (c.work === id) c.work = -1;
+      if (wasHome) this.rehouse(c);
     }
     b.occupants = [];
     b.capacity = 0;
     b.alive = false;
-    if (b.type === BuildingType.Station) this.removeLinesServing(id);
+    if (isTransitStop(b.type)) this.removeLinesServing(id);
+    if (isEmergencyStation(b.type)) this.retireUnitsOf(id);
     this.revision++;
+  }
+
+  /**
+   * Somebody whose home has just gone -- bulldozed, or burnt down.
+   *
+   * They take the first empty dwelling in the city, and leave altogether if
+   * there is not one. Doing nothing was not an option: a citizen still
+   * attached to a building that no longer exists stands in the street for
+   * good, because every trip they plan starts from an address that cannot be
+   * routed from, and they retry it forever.
+   */
+  private rehouse(c: Citizen): void {
+    for (const home of this.buildings) {
+      if (!home.alive || !isHome(home.type)) continue;
+      if (home.occupants.length >= home.capacity) continue;
+      home.occupants.push(c.id);
+      c.home = home.id;
+      c.state = CitizenState.AtHome;
+      c.x = tileCenterX(home.tile);
+      c.y = tileCenterY(home.tile);
+      c.prevX = c.x;
+      c.prevY = c.y;
+      return;
+    }
+    // Nowhere to go: they leave the city at the next migration pass, and stay
+    // indoors rather than stranded in the meantime.
+    c.left = true;
+    c.state = CitizenState.AtHome;
+  }
+
+  /**
+   * The station has gone, so its engines have nowhere to return to. They are
+   * retired where they stand rather than driven home to a demolished yard,
+   * and their slots go to the next station the player builds.
+   */
+  private retireUnitsOf(station: BuildingId): void {
+    for (const unit of this.units) {
+      if (unit.home !== station) continue;
+      unit.home = -1;
+      unit.incident = -1;
+      unit.state = UnitState.Retired;
+      unit.path = null;
+      unit.v = 0;
+    }
   }
 
   isAlive(b: Building | undefined): boolean {
@@ -319,28 +420,47 @@ export class World {
 
   // --- Transit -------------------------------------------------------------
 
-  addLine(stations: BuildingId[], route: TileIndex[], stopAt: number[]): TransitLine {
+  addLine(
+    stations: BuildingId[],
+    route: TileIndex[],
+    stopAt: number[],
+    mode = LineMode.Rail,
+  ): TransitLine {
+    const spec = specForMode(mode);
+    const railways = this.lines.filter((l) => l.mode === LineMode.Rail).length;
+    const routes = this.lines.length - railways;
     const line: TransitLine = {
       id: this.lines.length,
-      name: `${this.lines.length + 1}号線`,
+      name: mode === LineMode.Rail ? `${railways + 1}号線` : `バス${routes + 1}系統`,
       color: LINE_COLORS[this.lines.length % LINE_COLORS.length],
+      mode,
       stations,
       route,
       stopAt,
       stopStation: stopAt.map((_, i) => stationForStop(stations, i)),
-      trains: [],
+      vehicles: [],
       ridership: 0,
     };
     this.lines.push(line);
 
-    // Space the trains evenly around the round trip so the headway is even
-    // from the first tick, rather than letting them bunch at the terminus.
-    const lap = route.length - 1;
-    for (let i = 0; i < TRAINS_PER_LINE; i++) {
+    if (mode === LineMode.Rail) this.addTrains(line, spec.vehicles);
+    else this.addBuses(line, spec.vehicles);
+
+    this.revision++;
+    return line;
+  }
+
+  /**
+   * Space the trains evenly around the round trip so the headway is even from
+   * the first tick, rather than letting them bunch at the terminus.
+   */
+  private addTrains(line: TransitLine, count: number): void {
+    const lap = line.route.length - 1;
+    for (let i = 0; i < count; i++) {
       const train: Train = {
         id: this.trains.length,
         line: line.id,
-        s: (lap * i) / TRAINS_PER_LINE,
+        s: (lap * i) / count,
         v: 0,
         nextStop: 0,
         dwellUntil: 0,
@@ -351,10 +471,68 @@ export class World {
         prevY: 0,
       };
       this.trains.push(train);
-      line.trains.push(train.id);
+      line.vehicles.push(train.id);
     }
-    this.revision++;
-    return line;
+  }
+
+  /**
+   * Buses start spread over the stops rather than over the route.
+   *
+   * A bus plans its way from stop to stop over the live road network, so it
+   * has no position along a stored route to be spaced along -- and starting
+   * them all at the terminus would send three buses round the city nose to
+   * tail, which is exactly the bunching the spacing exists to avoid.
+   */
+  private addBuses(line: TransitLine, count: number): void {
+    const stops = line.stopAt.length;
+    for (let i = 0; i < count; i++) {
+      const at = Math.round((stops * i) / count) % stops;
+      const stop = this.buildings[line.stopStation[at]];
+      const slot = this.buses.findIndex((b) => b.line < 0);
+      const bus = createBus(
+        slot >= 0 ? slot : this.buses.length,
+        line.id,
+        at,
+        stop ? stop.tile : line.route[0],
+      );
+      if (slot >= 0) this.buses[slot] = bus;
+      else this.buses.push(bus);
+      line.vehicles.push(bus.id);
+    }
+  }
+
+  /**
+   * A road a bus route runs over has just gone. Re-route the line around the
+   * gap if the stops are still joined up, and withdraw it if they are not.
+   *
+   * Rail lines are simply withdrawn when their track is cut (below), and the
+   * asymmetry is deliberate: track exists to carry the line, so cutting it is
+   * a decision about the line. A road is the city's, and it gets moved,
+   * widened and re-laid for reasons that have nothing to do with the buses --
+   * killing the route every time would make bus lines unusable next to a
+   * player who is still building.
+   */
+  private repairRoadLines(tile: TileIndex): void {
+    for (const line of this.lines) {
+      if (line.mode !== LineMode.Road || !this.lineIsAlive(line)) continue;
+      if (!line.route.includes(tile)) continue;
+
+      const layout = layoutRoadRoute(this, line.stations);
+      if (!layout) {
+        this.removeLine(line.id);
+        continue;
+      }
+      line.route = layout.route;
+      line.stopAt = layout.stopAt;
+      line.stopStation = layout.stopAt.map((_, i) => stationForStop(line.stations, i));
+      // Every bus on the line re-plans from where it stands; the stop it was
+      // driving to is still the stop it is driving to.
+      for (const id of line.vehicles) {
+        const bus = this.buses[id - BUS_ID_BASE];
+        if (bus) bus.path = null;
+      }
+      this.revision++;
+    }
   }
 
   private removeLinesServing(station: BuildingId): void {
@@ -374,17 +552,27 @@ export class World {
     const line = this.lines[id];
     if (!line || line.route.length === 0) return;
 
-    for (const tid of line.trains) {
-      const train = this.trains[tid];
-      if (!train) continue;
-      for (const cid of train.passengers) {
+    for (const vid of line.vehicles) {
+      const vehicle = line.mode === LineMode.Rail
+        ? this.trains[vid]
+        : this.buses[vid - BUS_ID_BASE];
+      if (!vehicle) continue;
+      for (const cid of vehicle.passengers) {
         const c = this.citizens[cid];
         // Put riders back on the pavement; they will re-plan from there.
         if (c) c.path = null;
       }
-      train.passengers = [];
+      vehicle.passengers = [];
+      // A bus with no line is a free slot; a train belongs to its line and
+      // simply stops existing with it.
+      if (line.mode === LineMode.Road) {
+        const bus = vehicle as Bus;
+        bus.line = -1;
+        bus.path = null;
+        bus.v = 0;
+      }
     }
-    line.trains = [];
+    line.vehicles = [];
     line.route = [];
     line.stopAt = [];
     line.stopStation = [];

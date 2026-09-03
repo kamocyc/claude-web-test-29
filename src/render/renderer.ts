@@ -1,4 +1,5 @@
 import {
+  BUS_CAPACITY,
   CAR_FREE_SPEED,
   LANE_OFFSET,
   LORRY_CAPACITY,
@@ -20,6 +21,10 @@ import {
 import { SignalAxis } from '../sim/signals';
 import { BUILDING_ISSUES, buildingIssue, type BuildingIssue } from '../sim/diagnostics';
 import { CargoKind } from '../sim/lorry';
+import { IncidentKind, UnitState } from '../sim/emergency';
+import { Service } from '../sim/services';
+import { LineMode } from '../world/transit';
+import { isTransitStop } from '../world/buildings';
 import type { RoadAgent } from '../sim/vehicle';
 import { Resource } from '../core/types';
 import type { Citizen } from '../sim/citizen';
@@ -30,7 +35,14 @@ import type { Camera } from './camera';
 import type { Train } from '../world/transit';
 
 /** Which field is painted over the map, if any. */
-export type Overlay = 'none' | 'traffic' | 'power' | 'noise' | 'landValue';
+export type Overlay =
+  | 'none'
+  | 'traffic'
+  | 'power'
+  | 'noise'
+  | 'landValue'
+  | 'crime'
+  | 'services';
 
 export interface RenderOptions {
   showZones: boolean;
@@ -50,6 +62,8 @@ export class Renderer {
   private readonly stationBadges: Array<{ id: number; x: number; y: number }> = [];
   /** Failing buildings seen while drawing tiles, for the same reason. */
   private readonly issueBadges: Array<{ issue: BuildingIssue; x: number; y: number }> = [];
+  /** Buildings with something happening to them right now: a fire, a burglary. */
+  private readonly alarmBadges: Array<{ kind: IncidentKind; x: number; y: number }> = [];
 
   constructor(
     private readonly ctx: CanvasRenderingContext2D,
@@ -67,14 +81,18 @@ export class Renderer {
     const view = camera.visibleTiles();
     this.stationBadges.length = 0;
     this.issueBadges.length = 0;
+    this.alarmBadges.length = 0;
     this.drawTiles(sim, view, opts);
     this.drawLines(sim);
     this.drawSignals(sim, view);
     this.drawAgents(sim, alpha, opts);
     this.drawLorries(sim, alpha);
+    this.drawBuses(sim, alpha);
+    this.drawUnits(sim, alpha);
     this.drawTrains(sim, alpha);
     this.drawStationBadges(sim);
     this.drawIssueBadges();
+    this.drawAlarmBadges();
     this.drawPendingStations(sim, opts);
     if (opts.focusTile >= 0) this.drawFocus(opts.focusTile);
     if (opts.selected) this.drawSelection(opts.selected, alpha);
@@ -89,6 +107,10 @@ export class Renderer {
     const { ctx, camera } = this;
     const { map } = sim.world;
     const z = camera.zoom;
+    // Gathered once rather than asked per tile: there are a handful of live
+    // incidents and thousands of tiles on screen.
+    const alarms = new Map<number, IncidentKind>();
+    for (const incident of sim.emergency.active) alarms.set(incident.building, incident.kind);
 
     for (let y = view.y0; y <= view.y1; y++) {
       for (let x = view.x0; x <= view.x1; x++) {
@@ -119,10 +141,19 @@ export class Renderer {
           if (b && sim.world.isAlive(b)) {
             const fill = b.capacity > 0 ? b.occupants.length / b.capacity : 1;
             this.drawBuilding(p.x, p.y, z, b.type, fill);
-            if (b.type === BuildingType.Station) {
+            // Stops as well as stations: "3人待ち" over a shelter is the same
+            // question as over a platform, and the counter is the same one.
+            if (isTransitStop(b.type)) {
               this.stationBadges.push({ id: b.id, x: p.x + z / 2, y: p.y });
             }
-            if (opts.showIssues) {
+            // A fire outranks anything else that might be wrong with a
+            // building, and it is drawn whether or not the player has the
+            // warning badges switched on: it is an event with a deadline
+            // rather than a readout they chose to look at.
+            const alarm = alarms.get(bid);
+            if (alarm !== undefined) {
+              this.alarmBadges.push({ kind: alarm, x: p.x + z / 2, y: p.y });
+            } else if (opts.showIssues) {
               const issue = buildingIssue(b);
               if (issue !== null) {
                 this.issueBadges.push({ issue, x: p.x + z / 2, y: p.y });
@@ -238,6 +269,30 @@ export class Renderer {
         const value = sim.landValue.at(tile);
         ctx.globalAlpha = 0.4;
         ctx.fillStyle = valueColor(value / 100);
+        break;
+      }
+      case 'crime': {
+        const level = sim.crime.at(tile);
+        if (level < 1) return;
+        ctx.globalAlpha = Math.min(0.55, level / 90);
+        ctx.fillStyle = COLORS.crime;
+        break;
+      }
+      case 'services': {
+        // Civic cover is a property of the roads the services run along, so
+        // that is what it paints: green where a school and a fire station can
+        // both reach, amber where only one can, and nothing at all off the
+        // network -- which is itself the answer for an outpost with no road.
+        if (!sim.world.map.isRoad(tile)) return;
+        const school = sim.services.covers(Service.School, tile);
+        const fire = sim.services.covers(Service.Fire, tile);
+        if (!school && !fire) {
+          ctx.globalAlpha = 0.28;
+          ctx.fillStyle = COLORS.uncovered;
+          break;
+        }
+        ctx.globalAlpha = school && fire ? 0.4 : 0.25;
+        ctx.fillStyle = COLORS.covered;
         break;
       }
     }
@@ -401,6 +456,9 @@ export class Renderer {
       ctx.strokeStyle = line.color;
       ctx.globalAlpha = 0.55;
       ctx.lineWidth = Math.max(1.5, camera.zoom * 0.16);
+      // A bus route is dashed: it is a claim about roads that belong to
+      // everybody, not a railway that belongs to the line.
+      ctx.setLineDash(line.mode === LineMode.Road ? [camera.zoom * 0.5, camera.zoom * 0.4] : []);
       ctx.beginPath();
       for (let i = 0; i < line.route.length; i++) {
         const p = camera.worldToScreen(tileCenterX(line.route[i]), tileCenterY(line.route[i]));
@@ -409,6 +467,7 @@ export class Renderer {
       }
       ctx.stroke();
       ctx.globalAlpha = 1;
+      ctx.setLineDash([]);
     }
   }
 
@@ -529,6 +588,66 @@ export class Renderer {
   }
 
   /** How many people are standing on each platform, over the station itself. */
+  /**
+   * The buses, drawn in the colour of the line they work so a player can see
+   * at a glance which service is stuck in which jam.
+   */
+  private drawBuses(sim: Simulation, alpha: number): void {
+    const { ctx, camera } = this;
+    const z = camera.zoom;
+    if (z < 4) return;
+
+    for (const bus of sim.world.buses) {
+      if (bus.line < 0 || !bus.path) continue;
+      const line = sim.world.lines[bus.line];
+      if (!line) continue;
+      const pose = agentPose(bus, alpha);
+      const p = camera.worldToScreen(pose.x, pose.y);
+      if (offScreen(camera, p, 12)) continue;
+
+      const length = Math.max(5, z * 0.66);
+      const width = Math.max(3, z * 0.34);
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(pose.angle);
+      ctx.fillStyle = COLORS.busBody;
+      ctx.fillRect(-length / 2, -width / 2, length, width);
+      // A stripe in the line's colour, and the load along it: a full bus and
+      // an empty one are different things to the player watching a route.
+      ctx.fillStyle = line.color;
+      const load = Math.min(1, bus.passengers.length / BUS_CAPACITY);
+      ctx.fillRect(-length / 2, -width / 2, length * load, width * 0.42);
+      ctx.restore();
+    }
+  }
+
+  /** Fire engines and patrol cars, with a light on when they are on a call. */
+  private drawUnits(sim: Simulation, alpha: number): void {
+    const { ctx, camera } = this;
+    const z = camera.zoom;
+    if (z < 4) return;
+
+    for (const unit of sim.world.units) {
+      if (!unit.path) continue;
+      const pose = agentPose(unit, alpha);
+      const p = camera.worldToScreen(pose.x, pose.y);
+      if (offScreen(camera, p, 12)) continue;
+
+      const length = Math.max(4, z * 0.5);
+      const width = Math.max(3, z * 0.3);
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(pose.angle);
+      ctx.fillStyle = unit.kind === IncidentKind.Fire ? COLORS.fireEngine : COLORS.policeCar;
+      ctx.fillRect(-length / 2, -width / 2, length, width);
+      if (unit.state === UnitState.Responding) {
+        ctx.fillStyle = COLORS.blueLight;
+        ctx.fillRect(-length * 0.1, -width / 2, length * 0.2, width);
+      }
+      ctx.restore();
+    }
+  }
+
   private drawStationBadges(sim: Simulation): void {
     const z = this.camera.zoom;
     if (z < 7) return;
@@ -603,7 +722,13 @@ export class Renderer {
   }
 
   /** A small dark chip with a number in it, sized off the zoom. */
-  private drawBadge(cx: number, cy: number, text: string, z: number): void {
+  private drawBadge(
+    cx: number,
+    cy: number,
+    text: string,
+    z: number,
+    background: string = COLORS.badgeBackground,
+  ): void {
     const ctx = this.ctx;
     const fontSize = Math.max(9, Math.min(15, z * 0.7));
     ctx.font = `${fontSize}px system-ui, sans-serif`;
@@ -612,15 +737,36 @@ export class Renderer {
 
     const w = ctx.measureText(text).width + fontSize * 0.7;
     const h = fontSize * 1.35;
-    ctx.fillStyle = COLORS.badgeBackground;
+    ctx.fillStyle = background;
     ctx.fillRect(cx - w / 2, cy - h / 2, w, h);
-    ctx.fillStyle = COLORS.badgeText;
+    ctx.fillStyle = background === COLORS.badgeBackground ? COLORS.badgeText : COLORS.alertText;
     ctx.fillText(text, cx, cy);
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
   }
 
   /** Stations already picked in the line tool, so the player can see the plan. */
+  /**
+   * A fire or a burglary in progress, over the building it is happening to.
+   *
+   * Deliberately louder than the warning badges: one of these has a clock on
+   * it, and the player is being asked to act now rather than to plan better.
+   */
+  private drawAlarmBadges(): void {
+    const z = this.camera.zoom;
+    if (z < 6) return;
+    for (const badge of this.alarmBadges) {
+      const fire = badge.kind === IncidentKind.Fire;
+      this.drawBadge(
+        badge.x,
+        badge.y - Math.max(6, z * 0.32),
+        fire ? '火' : '盗',
+        z,
+        fire ? COLORS.alertCritical : COLORS.alertWarning,
+      );
+    }
+  }
+
   private drawPendingStations(sim: Simulation, opts: RenderOptions): void {
     if (opts.pendingStations.length === 0) return;
     const { ctx, camera } = this;
@@ -669,6 +815,12 @@ interface Pose {
  * The lane offset is that heading turned ninety degrees to the left. Traffic
  * keeps left, so the two directions never overlap on the same tile.
  */
+/** Whether a screen point is far enough outside the viewport to skip. */
+function offScreen(camera: Camera, p: { x: number; y: number }, margin: number): boolean {
+  return p.x < -margin || p.y < -margin
+    || p.x > camera.viewportWidth + margin || p.y > camera.viewportHeight + margin;
+}
+
 export function agentPose(c: RoadAgent, alpha: number): Pose {
   const x = c.prevX + (c.x - c.prevX) * alpha;
   const y = c.prevY + (c.y - c.prevY) * alpha;
@@ -747,6 +899,10 @@ const ZONE_COLORS: Record<Zone, string> = {
 };
 
 const BUILDING_COLORS: Record<BuildingType, string> = {
+  [BuildingType.BusStop]: COLORS.busStop,
+  [BuildingType.School]: COLORS.school,
+  [BuildingType.FireStation]: COLORS.fireStation,
+  [BuildingType.PoliceStation]: COLORS.policeStation,
   [BuildingType.House]: COLORS.residence,
   [BuildingType.Apartment]: COLORS.apartment,
   [BuildingType.Shop]: COLORS.commerce,

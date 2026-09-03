@@ -82,8 +82,9 @@ describe('the land value breakdown', () => {
     const home = sim.world.buildings.find((b) => b.alive && b.type === BuildingType.House);
     expect(home).toBeDefined();
 
-    const f = sim.landValue.factorsAt(sim.world, sim.noise, home!.tile);
-    const sum = f.base + f.water + f.greenery + f.station + f.shops + f.offices + f.noise;
+    const f = sim.landValue.factorsAt(sim.world, sim.noise, sim.crime, home!.tile);
+    const sum = f.base + f.water + f.greenery + f.station + f.shops + f.offices
+      + f.noise + f.crime;
     expect(f.target).toBeCloseTo(Math.min(100, Math.max(0, sum)), 5);
     // The panel shows `current`; it must be the same number the map paints.
     expect(f.current).toBe(sim.landValue.at(home!.tile));
@@ -95,7 +96,7 @@ describe('the land value breakdown', () => {
     run(sim, TICKS_PER_DAY * 2);
 
     const home = sim.world.buildings.find((b) => b.alive && b.type === BuildingType.House);
-    const f = sim.landValue.factorsAt(sim.world, sim.noise, home!.tile);
+    const f = sim.landValue.factorsAt(sim.world, sim.noise, sim.crime, home!.tile);
     // Not equality: the field chases its target by a quarter of the gap each
     // update, and the target itself moves as the traffic outside comes and
     // goes. A few points of lag is the model, not a disagreement.
@@ -108,14 +109,14 @@ describe('the land value breakdown', () => {
 
     const world = sim.world;
     const spot = world.map.at(30, 22);
-    const before = sim.landValue.factorsAt(world, sim.noise, spot);
+    const before = sim.landValue.factorsAt(world, sim.noise, sim.crime, spot);
     expect(before.station).toBe(0);
 
     // A station within walking distance is the biggest thing a player can do
     // to a tile's value, so it has to show up as its own term.
     const station = world.placeStation(world.map.at(31, 23));
     expect(station).not.toBeNull();
-    const after = sim.landValue.factorsAt(world, sim.noise, spot);
+    const after = sim.landValue.factorsAt(world, sim.noise, sim.crime, spot);
     expect(after.station).toBeGreaterThan(0);
     expect(after.target).toBeGreaterThan(before.target);
 

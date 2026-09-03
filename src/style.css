@@ -191,12 +191,12 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  padding: 0 7px;
+  padding: 0 5px;
   border-right: 1px solid rgba(255, 255, 255, 0.08);
 }
 .tool-group:last-child { border-right: none; }
 
-.tool-group-body { display: flex; gap: 3px; }
+.tool-group-body { display: flex; gap: 2px; }
 
 .tool-group-label {
   color: var(--muted);
@@ -223,7 +223,7 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
+  width: 28px;
   height: 28px;
   padding: 0;
   position: relative;

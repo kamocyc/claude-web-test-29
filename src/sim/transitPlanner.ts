@@ -1,8 +1,15 @@
-import { STATION_WALK_RADIUS, TRANSIT_PREFERENCE, WALK_SPEED } from '../config';
+import { TRANSIT_PREFERENCE, WALK_SPEED } from '../config';
 import { manhattan } from '../core/grid';
-import { BuildingType, type BuildingId, type TileIndex } from '../core/types';
-import type { Building } from '../world/buildings';
-import { expectedWaitTicks, rideTicks, stopsFor, type TransitLine } from '../world/transit';
+import { type BuildingId, type TileIndex } from '../core/types';
+import { isTransitStop, type Building } from '../world/buildings';
+import {
+  expectedWaitTicks,
+  modeForStop,
+  rideTicks,
+  specForMode,
+  stopsFor,
+  type TransitLine,
+} from '../world/transit';
 import type { World } from '../world/world';
 import { findPath } from './pathfinding';
 
@@ -25,15 +32,21 @@ export interface TransitPlan {
  * Build the best single-line transit itinerary between two buildings, or null
  * if none beats walking distance.
  *
- * No interchanges: the origin and destination stations must share a line.
+ * Buses and trains are searched together and judged by the same clock: what a
+ * citizen wants is to be at work, and whether that happens on rails or on the
+ * road is the city's problem, not theirs. A bus route with a stop outside the
+ * front door regularly beats a railway with a ten-minute walk at each end,
+ * which is exactly the trade the two modes are meant to offer.
+ *
+ * No interchanges: the origin and destination stops must share a line.
  * A multi-line search needs a graph over lines rather than tiles, and one line
- * is enough to make a rail network worth building; the limitation is called
- * out in the README rather than hidden.
+ * is enough to make a network worth building; the limitation is called out in
+ * the README rather than hidden.
  */
 export function planTransit(world: World, from: Building, to: Building): TransitPlan | null {
-  const origins = stationsNear(world, from.tile);
+  const origins = stopsNear(world, from.tile);
   if (origins.length === 0) return null;
-  const targets = stationsNear(world, to.tile);
+  const targets = stopsNear(world, to.tile);
   if (targets.length === 0) return null;
 
   let best: TransitPlan | null = null;
@@ -110,11 +123,21 @@ function walkRoute(world: World, from: Building, to: Building): TileIndex[] | nu
   return [from.tile, ...roads, to.tile];
 }
 
-function stationsNear(world: World, tile: TileIndex): Building[] {
+/**
+ * Every stop somebody standing on `tile` would consider walking to.
+ *
+ * How far that is depends on what the stop is: a station is worth a quarter
+ * of an hour on foot, a bus stop is not. Asking the stop rather than assuming
+ * one radius is what makes a dense network of cheap stops behave differently
+ * from a sparse one of expensive ones.
+ */
+function stopsNear(world: World, tile: TileIndex): Building[] {
   const out: Building[] = [];
   for (const b of world.buildings) {
-    if (!b.alive || b.type !== BuildingType.Station) continue;
-    if (manhattan(b.tile, tile) <= STATION_WALK_RADIUS) out.push(b);
+    if (!b.alive || !isTransitStop(b.type)) continue;
+    const mode = modeForStop(b.type);
+    if (mode === null) continue;
+    if (manhattan(b.tile, tile) <= specForMode(mode).walkRadius) out.push(b);
   }
   return out;
 }

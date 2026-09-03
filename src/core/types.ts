@@ -3,6 +3,8 @@ export type BuildingId = number;
 export type CitizenId = number;
 export type LineId = number;
 export type TrainId = number;
+export type BusId = number;
+export type IncidentId = number;
 
 export const enum Terrain {
   Grass = 0,
@@ -48,6 +50,11 @@ export const enum BuildingType {
   Mine = 8,
   Station = 9,
   PowerPlant = 10,
+  /** A pole and a shelter beside the road, where buses call. */
+  BusStop = 11,
+  School = 12,
+  FireStation = 13,
+  PoliceStation = 14,
 }
 
 /** What a building does in the supply chain. */

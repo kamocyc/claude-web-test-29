@@ -67,7 +67,7 @@ describe('rail', () => {
   it('runs trains along the line and returns them to the start', () => {
     const sim = new Simulation(railTown(true));
     const line = sim.world.activeLines[0];
-    const train = sim.world.trains[line.trains[0]];
+    const train = sim.world.trains[line.vehicles[0]];
     const lap = line.route.length - 1;
 
     const startS = train.s;
@@ -88,7 +88,7 @@ describe('rail', () => {
   it('accelerates out of a platform and brakes into the next one', () => {
     const sim = new Simulation(railTown(true));
     const line = sim.world.activeLines[0];
-    const train = sim.world.trains[line.trains[0]];
+    const train = sim.world.trains[line.vehicles[0]];
 
     const speeds: number[] = [];
     for (let i = 0; i < 2000; i++) {
@@ -166,7 +166,7 @@ describe('rail', () => {
           const c = sim.world.citizens[id];
           // Anyone aboard still has a ride booked and a walk home queued.
           expect(c.ride).not.toBeNull();
-          expect(c.boardedTrain).toBe(t.id);
+          expect(c.boardedVehicle).toBe(t.id);
           expect(c.legAfterRide).not.toBeNull();
         }
       }
@@ -184,7 +184,7 @@ describe('rail', () => {
     run(sim, TICKS_PER_DAY);
     for (const c of riders) {
       expect([CitizenState.AtHome, CitizenState.AtWork]).toContain(c.state);
-      expect(c.boardedTrain).toBe(-1);
+      expect(c.boardedVehicle).toBe(-1);
     }
   });
 
@@ -214,7 +214,7 @@ describe('rail', () => {
     for (const c of affected) {
       expect(c.state).not.toBe(CitizenState.Riding);
       expect(c.state).not.toBe(CitizenState.Waiting);
-      expect(c.boardedTrain).toBe(-1);
+      expect(c.boardedVehicle).toBe(-1);
     }
   });
 
@@ -224,7 +224,7 @@ describe('rail', () => {
       for (const c of sim.world.citizens) {
         h = (Math.imul(h, 31) + c.state) | 0;
         h = (Math.imul(h, 31) + Math.round(c.x * 1000)) | 0;
-        h = (Math.imul(h, 31) + c.boardedTrain) | 0;
+        h = (Math.imul(h, 31) + c.boardedVehicle) | 0;
       }
       for (const t of sim.world.trains) {
         h = (Math.imul(h, 31) + Math.round(t.s * 1000)) | 0;
