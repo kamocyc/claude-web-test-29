@@ -4,6 +4,7 @@ import { Zone, type BuildingId } from '../core/types';
 import { BUS_ID_BASE } from '../sim/bus';
 import { Simulation } from '../sim/simulation';
 import { createBusLine, createLineThrough, reshapeLineThrough } from '../world/lineBuilder';
+import { deserialize, serialize } from '../world/persistence';
 import { LINE_COLORS, LineMode } from '../world/transit';
 import { World } from '../world/world';
 import { flatten, powerTown, run } from './helpers';
@@ -182,6 +183,33 @@ describe('editing a line that is already running', () => {
     for (const id of stops) expect(world.buildings[id].alive).toBe(true);
     // And a second withdrawal is a no-op rather than an error.
     expect(world.withdrawLine(line.id)).toBe(false);
+  });
+
+  it('keeps an edited service across a save', () => {
+    const { world, stops } = servedTown();
+    const line = createBusLine(world, [stops[0], stops[3]])!;
+    const sim = new Simulation(world);
+    run(sim, 600);
+
+    world.renameLine(line.id, '環状');
+    world.cycleLineColor(line.id);
+    world.addVehicle(line.id);
+    reshapeLineThrough(world, line.id, stops);
+    run(sim, 400);
+
+    // Every edit is state the save has to carry: a load that reverted a
+    // re-routed line to the one the player opened would be a load that lied.
+    const restored = deserialize(JSON.parse(JSON.stringify(serialize(sim))));
+    const after = restored.world.lines[line.id];
+    expect(after.name).toBe('環状');
+    expect(after.color).toBe(line.color);
+    expect(after.stations).toEqual(stops);
+    expect(after.vehicles).toEqual(line.vehicles);
+    expect(after.route).toEqual(line.route);
+
+    run(restored, 800);
+    expect(restored.world.lineIsAlive(after)).toBe(true);
+    expect(restored.world.buses.some((b) => b.line === line.id && b.path)).toBe(true);
   });
 
   it('reuses the slot of a withdrawn line’s vehicles', () => {
