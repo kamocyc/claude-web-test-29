@@ -142,7 +142,7 @@ html, body {
   pointer-events: none;
 }
 
-/* --- Bottom toolbar: what the player can build ---------------------------- */
+/* --- Bottom toolbar: one row of grouped icons ----------------------------- */
 
 #toolbar {
   position: absolute;
@@ -150,7 +150,7 @@ html, body {
   bottom: 10px;
   transform: translateX(-50%);
   max-width: calc(100% - 20px);
-  padding: 8px 10px;
+  padding: 6px 8px 8px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -158,37 +158,96 @@ html, body {
   backdrop-filter: blur(6px);
 }
 
-.toolbar-groups {
+/* Names whatever the pointer is on. Its height is reserved whether or not it
+   has anything to say, so the toolbar never jumps as the pointer crosses it. */
+.toolbar-caption {
+  height: 16px;
+  padding: 0 2px 2px;
+  color: var(--accent);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* One row, in a fixed order. On a narrow window it scrolls rather than
+   wrapping: a button that moves is a button that has to be found again. */
+.toolbar-row {
   display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  justify-content: center;
+  align-items: flex-end;
+  gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.toolbar-row::-webkit-scrollbar { height: 4px; }
+.toolbar-row::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 2px;
 }
 
 .tool-group {
   display: flex;
   flex-direction: column;
-  align-items: center;
   gap: 3px;
-  padding: 0 8px;
+  padding: 0 7px;
   border-right: 1px solid rgba(255, 255, 255, 0.08);
 }
 .tool-group:last-child { border-right: none; }
 
-.tool-group-body { display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; }
+.tool-group-body { display: flex; gap: 3px; }
 
 .tool-group-label {
   color: var(--muted);
   font-size: 10px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
+  text-align: center;
+  white-space: nowrap;
 }
+
+/* --- Icon buttons --------------------------------------------------------- */
+
+.icon {
+  width: 18px;
+  height: 18px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.tool-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 28px;
+  padding: 0;
+  position: relative;
+}
+
+/* A zoning button carries the colour it paints, as a bar under its icon. */
+.tool-button.zone-button::after {
+  content: '';
+  position: absolute;
+  left: 5px;
+  right: 5px;
+  bottom: 3px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--swatch, transparent);
+}
+.tool-button.zone-button .icon { margin-bottom: 3px; }
 
 .hud-linebar {
   display: flex;
   align-items: center;
   gap: 8px;
   padding-bottom: 8px;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 .hud-linestatus { color: var(--accent); }
@@ -214,23 +273,58 @@ button.active {
 button:disabled { opacity: 0.45; cursor: not-allowed; }
 button.small { padding: 1px 7px; font-size: 12px; }
 
-/* A zoning button carries the colour it paints, as its own left-hand chip. */
-.zone-button {
-  position: relative;
-  padding-left: 20px;
+.speed-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  height: 26px;
+  font-variant-numeric: tabular-nums;
 }
-.zone-button::before {
-  content: '';
-  position: absolute;
-  left: 6px;
-  top: 50%;
-  width: 9px;
-  height: 9px;
-  margin-top: -4.5px;
-  border-radius: 2px;
-  background: var(--swatch, transparent);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+.speed-button .icon { width: 14px; height: 14px; }
+
+/* --- "？": the explanations, only when asked for -------------------------- */
+
+.help-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  margin-left: 6px;
+  vertical-align: -4px;
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
 }
+.help-button:hover { background: rgba(255, 255, 255, 0.1); color: var(--text); }
+.help-button.active {
+  background: transparent;
+  border-color: transparent;
+  color: var(--accent);
+}
+.help-button .icon { width: 14px; height: 14px; }
+
+.help-text,
+.win-help {
+  margin: 4px 0 8px;
+  padding: 7px 9px;
+  border-left: 2px solid var(--accent);
+  border-radius: 0 5px 5px 0;
+  background: rgba(53, 195, 240, 0.08);
+  color: var(--muted);
+}
+
+.win-help {
+  margin: 8px 10px 0;
+  /* Never let a long explanation push the numbers out of a short window. */
+  flex: none;
+  max-height: 45%;
+  overflow-y: auto;
+}
+
+h3.with-help { display: flex; align-items: center; }
 
 /* --- Floating windows ----------------------------------------------------- */
 
@@ -262,13 +356,22 @@ button.small { padding: 1px 7px; font-size: 12px; }
 .win-title { flex: 1; font-weight: 700; font-size: 13px; }
 
 .win-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 22px;
   height: 20px;
   padding: 0;
-  line-height: 1;
   background: transparent;
   border-color: transparent;
   color: var(--muted);
+}
+.win-icon .icon { width: 14px; height: 14px; }
+.win-icon.active {
+  background: transparent;
+  border-color: transparent;
+  color: var(--accent);
+  font-weight: inherit;
 }
 .win-icon:hover { background: rgba(255, 255, 255, 0.1); color: var(--text); }
 
@@ -358,6 +461,7 @@ dl {
   margin: 0;
 }
 dt { color: var(--muted); white-space: nowrap; }
+dl.keys dt { color: var(--accent); font-variant-numeric: tabular-nums; }
 dd { margin: 0; font-variant-numeric: tabular-nums; }
 
 .speed-bar {
@@ -412,7 +516,7 @@ dd { margin: 0; font-variant-numeric: tabular-nums; }
 }
 .warning-icon { font-size: 15px; }
 .warning-title { flex: 1; font-weight: 600; }
-.warning-advice { margin: 4px 0 0; color: var(--muted); }
+.warning-advice { margin: 6px 0 0; }
 
 /* --- The land value breakdown in the inspector ---------------------------- */
 

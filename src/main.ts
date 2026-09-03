@@ -12,13 +12,14 @@ import type { Lorry } from './sim/lorry';
 import { Simulation } from './sim/simulation';
 import { attachInput } from './ui/input';
 import { Hud, type PanelId } from './ui/hud';
-import { Inspector } from './ui/inspector';
-import { StatsPanel } from './ui/stats';
-import { PowerPanel } from './ui/power';
-import { WarningsPanel } from './ui/warnings';
+import { Inspector, INSPECTOR_HELP } from './ui/inspector';
+import { StatsPanel, STATS_HELP } from './ui/stats';
+import { PowerPanel, POWER_HELP } from './ui/power';
+import { WarningsPanel, WARNINGS_HELP } from './ui/warnings';
+import { HelpPanel } from './ui/help';
 import { InfoWindow } from './ui/window';
 import { applyTool, isDragTool, Tool, TOOL_BY_KEY } from './ui/tools';
-import { BudgetPanel } from './ui/budget';
+import { BudgetPanel, BUDGET_HELP } from './ui/budget';
 import type { Overlay } from './render/renderer';
 import { createLineThrough } from './world/lineBuilder';
 import { hasSavedCity, loadFromStorage, saveToStorage } from './world/persistence';
@@ -44,7 +45,18 @@ const windows: Record<PanelId, InfoWindow> = {
   power: new InfoWindow(windowLayer, 'power', '電力', { x: 350, y: 40, width: 300 }),
   budget: new InfoWindow(windowLayer, 'budget', '財政', { x: 670, y: 70, width: 300 }),
   stats: new InfoWindow(windowLayer, 'stats', '統計', { x: right(700), y: 100, width: 320 }),
+  help: new InfoWindow(windowLayer, 'help', '遊びかた', { x: 380, y: 90, width: 360 }),
 };
+
+/**
+ * The standing explanations, behind each window's "？" rather than printed
+ * next to the numbers they are about.
+ */
+windows.inspector.setHelp(INSPECTOR_HELP);
+windows.warnings.setHelp(WARNINGS_HELP);
+windows.power.setHelp(POWER_HELP);
+windows.budget.setHelp(BUDGET_HELP);
+windows.stats.setHelp(STATS_HELP);
 
 /**
  * The simulation is a `let` rather than a `const` because loading a save
@@ -58,6 +70,7 @@ const renderer = new Renderer(ctx, camera);
 const inspector = new Inspector(windows.inspector.body);
 const statsPanel = new StatsPanel(windows.stats.body);
 const powerPanel = new PowerPanel(windows.power.body);
+new HelpPanel(windows.help.body);
 const warningsPanel = new WarningsPanel(windows.warnings.body, {
   onShowMe: (tile) => showTile(tile),
 });

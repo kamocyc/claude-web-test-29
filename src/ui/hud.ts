@@ -1,12 +1,13 @@
 import { SPEED_MULTIPLIERS } from '../config';
 import { cityWarnings } from '../sim/diagnostics';
 import type { Simulation } from '../sim/simulation';
-import { expenseOf, Tool, TOOL_LABELS } from './tools';
+import { expenseOf, Tool, TOOL_LABELS, type ToolGroup } from './tools';
 import { formatMoney } from './money';
+import { iconMarkup, type IconName } from './icons';
 import type { Overlay } from '../render/renderer';
 
 /** The information windows the toolbar can open, in the order they appear. */
-export type PanelId = 'inspector' | 'warnings' | 'power' | 'budget' | 'stats';
+export type PanelId = 'inspector' | 'warnings' | 'power' | 'budget' | 'stats' | 'help';
 
 export interface HudCallbacks {
   onTool(tool: Tool): void;
@@ -38,11 +39,18 @@ export interface HudState {
  * city's vital signs across the top, the things you can build along the
  * bottom, and the map in between with nothing on it.
  *
- * The old single bar mixed all of it together -- clock, money, tools, zones,
- * overlays, saves and the current complaint in one wrapping row -- so nothing
- * had a fixed place and the eye had to search for the number it wanted every
- * time. Splitting it in two costs nothing and means the money is always in the
- * same corner.
+ * The bottom bar is **one row of icons in labelled groups** -- 選択 / 道路 /
+ * 鉄道 / 区画 / その他 / 撤去 / ビュー / ウィンドウ / システム. It used to be
+ * two rows of wrapping text buttons, which meant the buttons moved whenever the
+ * window was resized: a player who had learnt where 撤去 was found it somewhere
+ * else on a narrower screen, and the bar ate a fifth of the map. Icons in a
+ * fixed order cost a third of the width, never reflow, and put related actions
+ * next to each other rather than in whatever order they happened to be written.
+ *
+ * Nothing here explains itself in prose: the strip above the row names
+ * whatever the pointer is on (and, when it is on nothing, the tool currently
+ * in hand), and the longer answers live behind the "？" in each window's title
+ * bar and in 遊びかた.
  */
 export class Hud {
   private readonly clockEl: HTMLElement;
@@ -59,6 +67,9 @@ export class Hud {
   private readonly panelButtons = new Map<PanelId, HTMLButtonElement>();
   private readonly zoneButton: HTMLButtonElement;
   private readonly issueButton: HTMLButtonElement;
+  /** Names whatever the pointer is on, or the tool in hand. */
+  private readonly captionEl: HTMLElement;
+  private hovered = '';
 
   constructor(
     top: HTMLElement,
@@ -87,8 +98,10 @@ export class Hud {
     const speeds = el('div', 'hud-group hud-speeds');
     SPEED_MULTIPLIERS.forEach((m, i) => {
       const b = document.createElement('button');
-      b.textContent = m === 0 ? '⏸' : `×${m}`;
-      b.title = m === 0.25 ? '観察速度: 市民1人をゆっくり追える' : '';
+      if (m === 0) b.innerHTML = iconMarkup('pause');
+      else b.textContent = `×${m}`;
+      b.className = 'speed-button';
+      label(b, m === 0 ? '一時停止 (Space)' : m === 0.25 ? '観察速度: 市民1人を追える' : `×${m}`);
       b.addEventListener('click', () => this.cb.onSpeed(i));
       speeds.appendChild(b);
       this.speedButtons.push(b);
@@ -98,64 +111,101 @@ export class Hud {
     this.warningCountEl = el('span', 'hud-warning-count');
     const warningButton = document.createElement('button');
     warningButton.className = 'hud-warning-button';
-    warningButton.title = '警告の一覧を開く';
+    label(warningButton, '警告の一覧を開く');
     warningButton.append(this.warningCountEl, this.warningEl);
     warningButton.addEventListener('click', () => this.cb.onPanel('warnings'));
 
     top.append(this.clockEl, this.moneyEl, chips, warningButton, speeds);
 
-    // --- Bottom bar: what the player can do --------------------------------
+    // --- Bottom bar: one row, grouped ---------------------------------------
 
-    const build = group('つくる');
-    const zones = group('区画');
+    this.captionEl = el('div', 'toolbar-caption');
+    const row = el('div', 'toolbar-row');
+    const groups = new Map<ToolGroup, HTMLElement>();
+    for (const [id, label] of TOOL_GROUP_LABELS) {
+      const g = group(label);
+      groups.set(id, g.body);
+      row.appendChild(g.root);
+    }
+
     for (const info of TOOL_LABELS) {
-      const b = document.createElement('button');
-      b.textContent = info.key ? `${info.label} (${info.key.toUpperCase()})` : info.label;
       const expense = expenseOf(info.tool);
-      if (expense) b.title = `${info.label}: ${COST_HINTS[expense] ?? ''}`;
-      if (info.group === 'zone') b.style.setProperty('--swatch', ZONE_SWATCHES[info.tool] ?? '');
-      b.classList.add(info.group === 'zone' ? 'zone-button' : 'build-button');
-      b.addEventListener('click', () => this.cb.onTool(info.tool));
-      (info.group === 'zone' ? zones : build).body.appendChild(b);
+      const b = iconButton(info.icon, [
+        info.label,
+        info.key ? `(${info.key.toUpperCase()})` : '',
+        expense ? COST_HINTS[expense] ?? '' : '',
+      ], () => this.cb.onTool(info.tool));
+      if (info.swatch) {
+        b.classList.add('zone-button');
+        b.style.setProperty('--swatch', info.swatch);
+      }
+      groups.get(info.group)?.appendChild(b);
       this.toolButtons.set(info.tool, b);
     }
 
-    const views = group('情報ビュー');
-    this.zoneButton = button('区画表示 (Z)', () => this.cb.onToggleZones());
-    this.issueButton = button('警告アイコン', () => this.cb.onToggleIssues());
+    const views = group('ビュー');
+    this.zoneButton = iconButton('viewZones', ['区画表示', '(Z)'], () => this.cb.onToggleZones());
+    this.issueButton = iconButton('viewIssues', ['警告アイコン'], () => this.cb.onToggleIssues());
     views.body.append(this.zoneButton, this.issueButton);
-    for (const [overlay, label] of OVERLAY_LABELS) {
-      const b = button(label, () => this.cb.onOverlay(overlay));
+    for (const [overlay, label, icon, key] of OVERLAYS) {
+      const b = iconButton(icon, [label, `(${key})`], () => this.cb.onOverlay(overlay));
       views.body.appendChild(b);
       this.overlayButtons.set(overlay, b);
     }
 
     const panels = group('ウィンドウ');
-    for (const [id, label] of PANEL_LABELS) {
-      const b = button(label, () => this.cb.onPanel(id));
+    for (const [id, label, icon] of PANELS) {
+      const b = iconButton(icon, [label], () => this.cb.onPanel(id));
       panels.body.appendChild(b);
       this.panelButtons.set(id, b);
     }
-    panels.body.appendChild(button('市民をランダムに見る', () => this.cb.onPickRandom()));
+    panels.body.appendChild(
+      iconButton('randomCitizen', ['市民をランダムに見る'], () => this.cb.onPickRandom()),
+    );
 
-    const saves = group('街');
-    saves.body.appendChild(button('保存', () => this.cb.onSave()));
-    this.loadButton = button('読み込み', () => this.cb.onLoad());
-    saves.body.appendChild(this.loadButton);
+    const system = group('システム');
+    system.body.appendChild(iconButton('save', ['この街を保存'], () => this.cb.onSave()));
+    this.loadButton = iconButton('load', ['保存した街を読み込む'], () => this.cb.onLoad());
+    const helpButton = iconButton('help', ['遊びかた・ショートカット'], () => this.cb.onPanel('help'));
+    this.panelButtons.set('help', helpButton);
+    system.body.append(this.loadButton, helpButton);
+
+    row.append(views.root, panels.root, system.root);
 
     // Second row, shown only while the line tool is picking stations.
     this.lineBar = el('div', 'hud-linebar');
     this.lineStatus = el('span', 'hud-linestatus');
-    this.lineBar.append(
-      this.lineStatus,
-      button('この順で路線を作る', () => this.cb.onCommitLine()),
-      button('取消', () => this.cb.onCancelLine()),
-    );
+    const commit = document.createElement('button');
+    commit.textContent = 'この順で路線を作る';
+    commit.addEventListener('click', () => this.cb.onCommitLine());
+    const cancel = document.createElement('button');
+    cancel.textContent = '取消';
+    cancel.addEventListener('click', () => this.cb.onCancelLine());
+    this.lineBar.append(this.lineStatus, commit, cancel);
     this.lineBar.hidden = true;
 
-    const groups = el('div', 'toolbar-groups');
-    groups.append(build.root, zones.root, views.root, panels.root, saves.root);
-    bottom.append(this.lineBar, groups);
+    bottom.append(this.lineBar, this.captionEl, row);
+
+    // One caption for the whole bar, rather than a tooltip per button: the
+    // name always appears in the same place, and it cannot be clipped by the
+    // row when the bar is too narrow to fit and starts to scroll.
+    row.addEventListener('mouseover', (e) => {
+      const button = (e.target as HTMLElement).closest('button');
+      this.hovered = button?.dataset.label ?? '';
+    });
+    row.addEventListener('mouseleave', () => {
+      this.hovered = '';
+    });
+
+    // Most mice only have a vertical wheel, so on a window too narrow for the
+    // whole bar the wheel scrolls it sideways -- otherwise reaching 撤去 would
+    // mean dragging a 4px scrollbar, which is worse than the wrapping row this
+    // replaced.
+    row.addEventListener('wheel', (e) => {
+      if (row.scrollWidth <= row.clientWidth) return;
+      e.preventDefault();
+      row.scrollLeft += e.deltaY + e.deltaX;
+    }, { passive: false });
   }
 
   /** Greyed out until there is something to load, so the button never lies. */
@@ -205,6 +255,9 @@ export class Hud {
     this.zoneButton.classList.toggle('active', state.showZones);
     this.issueButton.classList.toggle('active', state.showIssues);
     this.speedButtons.forEach((b, i) => b.classList.toggle('active', i === sim.clock.speedIndex));
+
+    const inHand = TOOL_LABELS.find((t) => t.tool === state.tool);
+    this.captionEl.textContent = this.hovered || (inHand ? `${inHand.label} を選択中` : '');
   }
 
   private setChip(key: string, value: string): void {
@@ -226,37 +279,30 @@ const CHIPS: ReadonlyArray<[string, string]> = [
   ['transit', '鉄道'],
 ];
 
-const PANEL_LABELS: ReadonlyArray<[PanelId, string]> = [
-  ['inspector', '詳細'],
-  ['warnings', '警告'],
-  ['power', '電力'],
-  ['budget', '財政'],
-  ['stats', '統計'],
+/** The building half of the toolbar, in the order the groups appear. */
+const TOOL_GROUP_LABELS: ReadonlyArray<[ToolGroup, string]> = [
+  ['select', '選択'],
+  ['road', '道路'],
+  ['rail', '鉄道'],
+  ['zone', '区画'],
+  ['other', 'その他'],
+  ['bulldoze', '撤去'],
 ];
 
-const OVERLAY_LABELS: ReadonlyArray<[Overlay, string]> = [
-  ['traffic', '渋滞 (T)'],
-  ['power', '電力 (P)'],
-  ['noise', '騒音 (N)'],
-  ['landValue', '地価 (V)'],
+const PANELS: ReadonlyArray<[PanelId, string, IconName]> = [
+  ['inspector', '詳細', 'winInspector'],
+  ['warnings', '警告', 'winWarnings'],
+  ['power', '電力', 'winPower'],
+  ['budget', '財政', 'winBudget'],
+  ['stats', '統計', 'winStats'],
 ];
 
-/**
- * The colour chip on each zoning button, so the button and the ground it
- * paints are recognisably the same thing -- the way the zoning bar works in
- * Cities: Skylines.
- */
-const ZONE_SWATCHES: Partial<Record<Tool, string>> = {
-  [Tool.ResidentialLow]: '#8ed64a',
-  [Tool.ResidentialHigh]: '#4f9e35',
-  [Tool.Commercial]: '#4fa3e3',
-  [Tool.Industrial]: '#e0c33c',
-  [Tool.Office]: '#2fc4c4',
-  [Tool.Farm]: '#cbb04a',
-  [Tool.Forestry]: '#3f9a5a',
-  [Tool.Fishery]: '#46b8cf',
-  [Tool.Mining]: '#a97c52',
-};
+const OVERLAYS: ReadonlyArray<[Overlay, string, IconName, string]> = [
+  ['traffic', '渋滞', 'overlayTraffic', 'T'],
+  ['power', '電力', 'overlayPower', 'P'],
+  ['noise', '騒音', 'overlayNoise', 'N'],
+  ['landValue', '地価', 'overlayLandValue', 'V'],
+];
 
 const COST_HINTS: Partial<Record<string, string>> = {
   road: '¥45/タイル',
@@ -273,19 +319,39 @@ function el(tag: string, cls: string): HTMLElement {
   return e;
 }
 
-function button(label: string, onClick: () => void): HTMLButtonElement {
+/** An icon button, named for the caption strip and for screen readers. */
+function iconButton(
+  name: IconName,
+  parts: readonly string[],
+  onClick: () => void,
+): HTMLButtonElement {
   const b = document.createElement('button');
-  b.textContent = label;
+  b.className = 'tool-button';
+  b.innerHTML = iconMarkup(name);
+  label(b, parts.filter((part) => part !== '').join('　'));
   b.addEventListener('click', onClick);
   return b;
 }
 
-/** A labelled cluster of buttons in the bottom toolbar. */
-function group(label: string): { root: HTMLElement; body: HTMLElement } {
+/**
+ * The name of a control, in the one place that carries it.
+ *
+ * An icon with no name is a guessing game, so the same string is what the
+ * caption strip shows, what the browser's own tooltip says for anyone who
+ * waits for one, and what a screen reader announces.
+ */
+function label(b: HTMLElement, text: string): void {
+  b.dataset.label = text;
+  b.title = text;
+  b.setAttribute('aria-label', text);
+}
+
+/** A labelled cluster of buttons in the single toolbar row. */
+function group(name: string): { root: HTMLElement; body: HTMLElement } {
   const root = el('div', 'tool-group');
   const caption = el('span', 'tool-group-label');
-  caption.textContent = label;
+  caption.textContent = name;
   const body = el('div', 'tool-group-body');
-  root.append(body, caption);
+  root.append(caption, body);
   return { root, body };
 }

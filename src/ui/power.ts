@@ -2,6 +2,11 @@ import { POWER_PLANT_OUTPUT } from '../config';
 import type { Simulation } from '../sim/simulation';
 import { note, row, section } from './widgets';
 
+/** Shown by the window's "？", not next to the numbers. */
+export const POWER_HELP = '電線は道路の下を通ります。つながっていない道路網は別々の電力網になるので、'
+  + '街全体で足りていても、繋がっていない地区は停電します。'
+  + '道路で繋ぐか、その地区にも発電所を建ててください。';
+
 const REFRESH_MS = 250;
 
 /**
@@ -49,26 +54,23 @@ export class PowerPanel {
         row('発電所', `${report.plants} か所（1か所あたり ${POWER_PLANT_OUTPUT}）`),
         row('停電中の建物', `${report.unpowered} 件`, report.unpowered > 0),
         row('　うち電力網の外', `${report.offGrid} 件`, report.offGrid > 0),
+        row(
+          '必要な増設',
+          report.shortfall > 0
+            ? `発電所 ${Math.ceil(report.shortfall / POWER_PLANT_OUTPUT)} か所`
+            : 'なし',
+          report.shortfall > 0,
+        ),
       ]),
       gauge(report.supply, report.demand),
       this.networks(sim),
-      note(
-        '電線は道路の下を通ります。つながっていない道路網は別々の電力網になるので、'
-        + '道路でつなぐか、その地区にも発電所を建ててください。',
-      ),
     );
-
-    if (report.shortfall > 0) {
-      this.body.append(
-        note(`あと ${Math.ceil(report.shortfall / POWER_PLANT_OUTPUT)} か所の発電所で足ります。`),
-      );
-    }
   }
 
   /** One row per road network that has anything on it, worst shortage first. */
   private networks(sim: Simulation): HTMLElement {
     const { networks } = sim.power.report;
-    if (networks.length === 0) return section('道路網ごと', [note('まだ何も建っていません。')]);
+    if (networks.length === 0) return section('道路網ごと', [note('まだ何も建っていません')]);
 
     const rows = networks.slice(0, 8).map((grid, i) => {
       const short = grid.demand - grid.supply;

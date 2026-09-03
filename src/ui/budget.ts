@@ -4,6 +4,11 @@ import type { TaxRates } from '../sim/economy';
 import { formatMoney, formatPercent } from './money';
 import { button, heading, row } from './widgets';
 
+/** Shown by the window's "？". */
+export const BUDGET_HELP = '内訳は前日の実績です（見込みではありません）。'
+  + '税率を上げると住民と企業は不満を持ち、下げると人が集まります。'
+  + '借入には利息がかかり、毎日の支出になります。';
+
 const REFRESH_MS = 250;
 
 export interface BudgetCallbacks {

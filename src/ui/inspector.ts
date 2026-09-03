@@ -11,6 +11,18 @@ import type { LandValueFactors } from '../sim/landValue';
 import { BUILDING_ISSUES, buildingIssue } from '../sim/diagnostics';
 import { Industry } from '../core/types';
 import { ZONE_LABELS } from '../world/zoneRules';
+import { help, HelpState, subheading } from './widgets';
+
+/** Shown by the window's "？". */
+export const INSPECTOR_HELP = '市民・建物・駅・トラックをクリックすると、そのものの現在がここに出ます。'
+  + '速度を ×0.25 にして「カメラで追う」を入れると、1人の一日を最初から最後まで追えます。';
+
+/** Behind the "？" on the land value breakdown. */
+const LAND_VALUE_HELP = '地価を上げるには、駅と商店を近くに、工場と幹線道路を遠くに。水辺と森も効きます。'
+  + '地価が低いと高密度住宅は建たず、住民の幸福度も下がります。';
+
+/** Rebuilt a few times a second, like the other panels, rather than per frame. */
+const REFRESH_MS = 250;
 
 /**
  * The panel the whole game exists for: one citizen, what they are doing, and
@@ -21,6 +33,11 @@ import { ZONE_LABELS } from '../world/zoneRules';
 export class Inspector {
   private readonly body: HTMLElement;
   private readonly followBox: HTMLInputElement;
+  /** The body is rebuilt as the city runs; its "？" are built once. */
+  private readonly helpState = new HelpState();
+  private lastDraw = 0;
+  /** Set when the selection changes, so a click never waits for the timer. */
+  private dirty = true;
 
   /**
    * What is being inspected, for the window's own title bar. Kept here rather
@@ -55,6 +72,7 @@ export class Inspector {
   }
 
   select(c: Citizen | null): void {
+    this.dirty = true;
     this.selected = c;
     if (c) {
       this.selectedStation = null;
@@ -63,6 +81,7 @@ export class Inspector {
   }
 
   selectStation(b: Building | null): void {
+    this.dirty = true;
     this.selectedStation = b;
     if (b) {
       this.selected = null;
@@ -71,6 +90,7 @@ export class Inspector {
   }
 
   selectLorry(l: Lorry | null): void {
+    this.dirty = true;
     this.selectedLorry = l;
     if (l) {
       this.selected = null;
@@ -80,12 +100,17 @@ export class Inspector {
 
   /** Called after a load, when every id in the panel belongs to an old city. */
   clear(): void {
+    this.dirty = true;
     this.selected = null;
     this.selectedStation = null;
     this.selectedLorry = null;
   }
 
-  update(sim: Simulation): void {
+  update(sim: Simulation, now = performance.now()): void {
+    if (!this.dirty && now - this.lastDraw < REFRESH_MS) return;
+    this.lastDraw = now;
+    this.dirty = false;
+
     if (this.selectedLorry) {
       this.title = 'トラック';
       this.updateLorry(sim, this.selectedLorry);
@@ -102,7 +127,7 @@ export class Inspector {
 
     const c = this.selected;
     if (!c) {
-      this.body.innerHTML = '<p class="empty">市民をクリックすると、その人の一日を追えます。<br>×0.25 の観察速度と「カメラで追う」を組み合わせると、通勤を最初から最後まで見届けられます。<br><br>電車に乗る市民を選ぶと、駅までの徒歩・ホームでの待ち・乗車・降車後の徒歩がそのまま観察できます。<br><br>駅をクリックすると、待っている人数と発着する路線が見られます。</p>';
+      this.body.innerHTML = '<p class="empty">市民・建物・駅・トラックをクリック</p>';
       return;
     }
 
@@ -174,7 +199,7 @@ export class Inspector {
     // Why this person feels the way they do, in the same terms the city-wide
     // panel uses, so an unhappy citizen can be traced to a specific failure.
     if (home && home.alive) {
-      this.body.appendChild(subheading('住環境'));
+      this.body.append(...subheading('住環境'));
       this.body.appendChild(definitionList([
         ['騒音', `${Math.round(sim.noise.at(home.tile))} / 100`],
         ['電気', home.powered ? '来ている' : '来ていない'],
@@ -194,7 +219,14 @@ export class Inspector {
    */
   private appendLandValue(sim: Simulation, tile: number): void {
     const f = sim.landValue.factorsAt(sim.world, sim.noise, tile);
-    this.body.appendChild(subheading(`地価 ${Math.round(f.current)} / 100 の内訳`));
+    this.body.append(
+      ...subheading(
+        `地価 ${Math.round(f.current)} / 100 の内訳`,
+        LAND_VALUE_HELP,
+        this.helpState,
+        'landValue',
+      ),
+    );
     this.body.appendChild(definitionList([
       ['基準値', `${f.base}`],
       ...LAND_VALUE_TERMS
@@ -202,11 +234,6 @@ export class Inspector {
         .filter(([, value]) => value !== '±0'),
       ['→ 落ち着く先', `${Math.round(f.target)}`],
     ]));
-    const hint = document.createElement('p');
-    hint.className = 'stat-note';
-    hint.textContent = '地価を上げるには、駅・商店を近くに、工場と幹線道路を遠くに。'
-      + '水辺と森も効きます。地価が低いと高密度住宅は建たず、住民の幸福度も下がります。';
-    this.body.appendChild(hint);
   }
 
   /**
@@ -251,7 +278,7 @@ export class Inspector {
    */
   private updateBuilding(sim: Simulation, b: Building): void {
     if (!sim.world.isAlive(b)) {
-      this.body.innerHTML = '<p class="empty">この建物は撤去されました。</p>';
+      this.body.innerHTML = '<p class="empty">撤去されました</p>';
       return;
     }
     const spec = specFor(b.type);
@@ -298,8 +325,10 @@ export class Inspector {
       const style = BUILDING_ISSUES[issue];
       const banner = document.createElement('p');
       banner.className = `warning warning-${style.tone}`;
-      banner.textContent = `${style.icon} ${style.label} — ${style.advice}`;
-      this.body.appendChild(banner);
+      banner.textContent = `${style.icon} ${style.label}`;
+      const advice = help(style.advice, this.helpState, `issue-${issue}`);
+      banner.appendChild(advice.button);
+      this.body.append(banner, advice.body);
     }
     this.body.appendChild(definitionList(rows));
     this.appendLandValue(sim, b.tile);
@@ -313,7 +342,7 @@ export class Inspector {
   private updateStation(sim: Simulation, station: Building): void {
     const world = sim.world;
     if (!world.isAlive(station)) {
-      this.body.innerHTML = '<p class="empty">この駅は撤去されました。</p>';
+      this.body.innerHTML = '<p class="empty">撤去されました</p>';
       return;
     }
 
@@ -335,20 +364,7 @@ export class Inspector {
 
     this.body.innerHTML = '';
     this.body.appendChild(definitionList(rows));
-
-    if (lines.length === 0) {
-      const hint = document.createElement('p');
-      hint.className = 'empty';
-      hint.textContent = '「路線」ツールでこの駅を含む駅を2つ以上選ぶと、路線を開設できます。';
-      this.body.appendChild(hint);
-    }
   }
-}
-
-function subheading(text: string): HTMLElement {
-  const h = document.createElement('h3');
-  h.textContent = text;
-  return h;
 }
 
 const BUILDING_LABELS: Record<BuildingType, string> = {

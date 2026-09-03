@@ -1,4 +1,6 @@
+import { COLORS } from '../render/palette';
 import { Zone, type TileIndex } from '../core/types';
+import type { IconName } from './icons';
 import { Expense, type Economy } from '../sim/economy';
 import type { World } from '../world/world';
 import { zoneRefusalReason } from '../world/zoneRules';
@@ -48,33 +50,74 @@ export function zoneOf(tool: Tool): Zone | null {
   }
 }
 
+/** Which cluster of the one-row toolbar a tool sits in. */
+export type ToolGroup = 'select' | 'road' | 'rail' | 'zone' | 'other' | 'bulldoze';
+
 export interface ToolInfo {
   tool: Tool;
   label: string;
   /** Keyboard shortcut, or '' for tools that only have a button. */
   key: string;
-  /** Which row of the toolbar it belongs to. */
-  group: 'build' | 'zone';
+  /** Which cluster of the toolbar it belongs to. */
+  group: ToolGroup;
+  /** The picture on its button. */
+  icon: IconName;
+  /**
+   * For zoning tools, the colour this tool paints -- taken from the map's own
+   * palette so the button and the ground can never disagree.
+   */
+  swatch?: string;
 }
 
 export const TOOL_LABELS: ReadonlyArray<ToolInfo> = [
-  { tool: Tool.Select, label: '選択', key: '1', group: 'build' },
-  { tool: Tool.Road, label: '道路', key: '2', group: 'build' },
-  { tool: Tool.Rail, label: '線路', key: '3', group: 'build' },
-  { tool: Tool.Station, label: '駅', key: '4', group: 'build' },
-  { tool: Tool.Line, label: '路線', key: '5', group: 'build' },
-  { tool: Tool.Power, label: '発電所', key: '6', group: 'build' },
-  { tool: Tool.Bulldoze, label: '撤去', key: '7', group: 'build' },
+  { tool: Tool.Select, label: '選択', key: '1', group: 'select', icon: 'select' },
 
-  { tool: Tool.ResidentialLow, label: '低密度住宅', key: 'q', group: 'zone' },
-  { tool: Tool.ResidentialHigh, label: '高密度住宅', key: 'w', group: 'zone' },
-  { tool: Tool.Commercial, label: '商業', key: 'e', group: 'zone' },
-  { tool: Tool.Industrial, label: '工業', key: 'r', group: 'zone' },
-  { tool: Tool.Office, label: 'オフィス', key: 't', group: 'zone' },
-  { tool: Tool.Farm, label: '農業', key: 'a', group: 'zone' },
-  { tool: Tool.Forestry, label: '林業', key: 's', group: 'zone' },
-  { tool: Tool.Fishery, label: '漁業', key: 'd', group: 'zone' },
-  { tool: Tool.Mining, label: '鉱業', key: 'f', group: 'zone' },
+  { tool: Tool.Road, label: '道路', key: '2', group: 'road', icon: 'road' },
+
+  { tool: Tool.Rail, label: '線路', key: '3', group: 'rail', icon: 'rail' },
+  { tool: Tool.Station, label: '駅', key: '4', group: 'rail', icon: 'station' },
+  { tool: Tool.Line, label: '路線', key: '5', group: 'rail', icon: 'line' },
+
+  {
+    tool: Tool.ResidentialLow, label: '低密度住宅', key: 'q', group: 'zone',
+    icon: 'zoneHouse', swatch: COLORS.residence,
+  },
+  {
+    tool: Tool.ResidentialHigh, label: '高密度住宅', key: 'w', group: 'zone',
+    icon: 'zoneApartment', swatch: COLORS.apartment,
+  },
+  {
+    tool: Tool.Commercial, label: '商業', key: 'e', group: 'zone',
+    icon: 'zoneShop', swatch: COLORS.commerce,
+  },
+  {
+    tool: Tool.Industrial, label: '工業', key: 'r', group: 'zone',
+    icon: 'zoneFactory', swatch: COLORS.industry,
+  },
+  {
+    tool: Tool.Office, label: 'オフィス', key: 't', group: 'zone',
+    icon: 'zoneOffice', swatch: COLORS.office,
+  },
+  {
+    tool: Tool.Farm, label: '農業', key: 'a', group: 'zone',
+    icon: 'zoneFarm', swatch: COLORS.farm,
+  },
+  {
+    tool: Tool.Forestry, label: '林業', key: 's', group: 'zone',
+    icon: 'zoneForest', swatch: COLORS.forestry,
+  },
+  {
+    tool: Tool.Fishery, label: '漁業', key: 'd', group: 'zone',
+    icon: 'zoneFish', swatch: COLORS.fishery,
+  },
+  {
+    tool: Tool.Mining, label: '鉱業', key: 'f', group: 'zone',
+    icon: 'zoneMine', swatch: COLORS.mining,
+  },
+
+  { tool: Tool.Power, label: '発電所', key: '6', group: 'other', icon: 'powerPlant' },
+
+  { tool: Tool.Bulldoze, label: '撤去', key: '7', group: 'bulldoze', icon: 'bulldoze' },
 ];
 
 export const TOOL_BY_KEY: Readonly<Record<string, Tool>> = Object.fromEntries(

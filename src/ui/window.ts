@@ -1,3 +1,5 @@
+import { iconMarkup, type IconName } from './icons';
+
 /**
  * A floating, draggable information window.
  *
@@ -16,8 +18,12 @@ export class InfoWindow {
   readonly body: HTMLElement;
 
   private readonly titleEl: HTMLElement;
+  private readonly bar: HTMLElement;
   private readonly collapseButton: HTMLButtonElement;
   private collapsed = false;
+  /** The explanation behind this window's "？", once one has been set. */
+  private helpText: HTMLElement | null = null;
+  private helpButton: HTMLButtonElement | null = null;
 
   /** Called whenever the window opens or closes, so a toolbar can light up. */
   onVisibilityChange: (() => void) | null = null;
@@ -37,13 +43,14 @@ export class InfoWindow {
 
     const bar = document.createElement('header');
     bar.className = 'win-bar';
+    this.bar = bar;
 
     this.titleEl = document.createElement('span');
     this.titleEl.className = 'win-title';
     this.titleEl.textContent = title;
 
-    this.collapseButton = iconButton('－', '折りたたむ', () => this.toggleCollapsed());
-    const close = iconButton('✕', '閉じる', () => this.close());
+    this.collapseButton = iconButton('collapse', '折りたたむ', () => this.toggleCollapsed());
+    const close = iconButton('close', '閉じる', () => this.close());
 
     bar.append(this.titleEl, this.collapseButton, close);
 
@@ -86,6 +93,32 @@ export class InfoWindow {
     this.titleEl.textContent = text;
   }
 
+  /**
+   * Give this window a "？" in its title bar.
+   *
+   * The explanation lives here rather than in the panel body because the body
+   * is rebuilt several times a second from the simulation: anything static put
+   * in it would be thrown away and re-created along with the numbers, and
+   * would lose whether the player had opened it. Here it is written once and
+   * simply shown or hidden.
+   */
+  setHelp(text: string): void {
+    if (this.helpText) {
+      this.helpText.textContent = text;
+      return;
+    }
+    const help = document.createElement('div');
+    help.className = 'win-help';
+    help.textContent = text;
+    help.hidden = true;
+    this.helpText = help;
+    this.root.insertBefore(help, this.body);
+
+    const button = iconButton('help', '説明', () => this.showHelp(help.hidden));
+    this.helpButton = button;
+    this.bar.insertBefore(button, this.collapseButton);
+  }
+
   /** True when the window is open and its body is actually showing. */
   get isVisible(): boolean {
     return this.isOpen && !this.collapsed;
@@ -94,7 +127,14 @@ export class InfoWindow {
   private toggleCollapsed(): void {
     this.collapsed = !this.collapsed;
     this.body.hidden = this.collapsed;
-    this.collapseButton.textContent = this.collapsed ? '＋' : '－';
+    if (this.collapsed) this.showHelp(false);
+    this.collapseButton.innerHTML = iconMarkup(this.collapsed ? 'expand' : 'collapse');
+  }
+
+  private showHelp(show: boolean): void {
+    if (!this.helpText || !this.helpButton) return;
+    this.helpText.hidden = !show;
+    this.helpButton.classList.toggle('active', show);
   }
 
   private raise(): void {
@@ -155,11 +195,12 @@ export class InfoWindow {
   }
 }
 
-function iconButton(label: string, title: string, onClick: () => void): HTMLButtonElement {
+function iconButton(name: IconName, title: string, onClick: () => void): HTMLButtonElement {
   const b = document.createElement('button');
   b.className = 'win-icon';
-  b.textContent = label;
+  b.innerHTML = iconMarkup(name);
   b.title = title;
+  b.setAttribute('aria-label', title);
   b.addEventListener('click', onClick);
   return b;
 }

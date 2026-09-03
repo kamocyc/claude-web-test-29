@@ -5,6 +5,10 @@ import { vacantDwellings } from '../sim/happiness';
 import { ticksToMinutes } from '../core/clock';
 import { bar, note, row, section } from './widgets';
 
+/** Shown by the window's "？". */
+export const STATS_HELP = '上半分はいまこの瞬間の市民の内訳、下半分は完了した移動の実績です。'
+  + '「移動中」が多いのに平均所要が伸びていれば、街は忙しいのではなく詰まっています。';
+
 /** Rebuilt a few times a second; every frame would be wasted DOM work. */
 const REFRESH_MS = 250;
 
@@ -128,7 +132,7 @@ function moodColor(score: number): string {
 
 function modeRows(live: LiveStats): HTMLElement[] {
   const travelling = live.walking + live.driving + live.usingTransit;
-  if (travelling === 0) return [note('いま外出している市民はいません')];
+  if (travelling === 0) return [note('外出中の市民なし')];
   return [
     bar('徒歩', live.walking, travelling, '#e8eef5'),
     bar('車', live.driving, travelling, '#e0c33c'),
@@ -140,7 +144,7 @@ function modeRows(live: LiveStats): HTMLElement[] {
 function lineSection(sim: Simulation): HTMLElement {
   const lines = sim.world.activeLines;
   if (lines.length === 0) {
-    return section('路線', [note('路線がありません。駅を2つ以上選んで路線を作れます。')]);
+    return section('路線', [note('路線なし')]);
   }
 
   const rows = lines.map((line) => {

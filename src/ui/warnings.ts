@@ -2,7 +2,11 @@ import { tileX, tileY } from '../core/grid';
 import { cityWarnings, type CityWarning } from '../sim/diagnostics';
 import type { Simulation } from '../sim/simulation';
 import type { TileIndex } from '../core/types';
-import { note } from './widgets';
+import { help, HelpState, note } from './widgets';
+
+/** Shown by the window's "？". */
+export const WARNINGS_HELP = '重いものから順に並んでいます。各行の「？」に対処法、'
+  + '「(x, y) を見る」で現場へカメラが飛びます。地図の上に出るバッジも同じ判定です。';
 
 const REFRESH_MS = 400;
 
@@ -17,15 +21,20 @@ export interface WarningCallbacks {
  * The toolbar can only ever show the single most urgent complaint, which is
  * exactly the wrong amount of information when three things are wrong at once:
  * the player fixes the loudest one and the next one appears, with no sense of
- * how much is broken. Here they are all visible, each with what to do about it
- * and -- where there is a specific building at fault -- a button that takes the
- * camera to it, because "12件の建物に電気が来ていません" is not much use if you
- * cannot find them.
+ * how much is broken. Here they are all visible, each with -- where there is a
+ * specific building at fault -- a button that takes the camera to it, because
+ * "12件の建物に電気が来ていません" is not much use if you cannot find them.
+ *
+ * What to do about a warning is a sentence, and eight sentences stacked up is
+ * a page of text rather than a list of problems, so each line keeps its advice
+ * behind its own "？".
  */
 export class WarningsPanel {
   private readonly body: HTMLElement;
   private lastDraw = 0;
   private lastSignature = '';
+  /** The "？" of each warning, kept across rebuilds of the list. */
+  private readonly helpState = new HelpState();
 
   constructor(root: HTMLElement, private readonly cb: WarningCallbacks) {
     root.innerHTML = '';
@@ -47,7 +56,7 @@ export class WarningsPanel {
 
     this.body.innerHTML = '';
     if (warnings.length === 0) {
-      this.body.appendChild(note('いまのところ問題はありません。'));
+      this.body.appendChild(note('問題なし'));
       return;
     }
     for (const warning of warnings) this.body.appendChild(this.card(warning));
@@ -78,11 +87,11 @@ export class WarningsPanel {
       head.appendChild(show);
     }
 
-    const advice = document.createElement('p');
-    advice.className = 'warning-advice';
-    advice.textContent = warning.advice;
+    const advice = help(warning.advice, this.helpState, warning.id);
+    advice.body.classList.add('warning-advice');
+    head.appendChild(advice.button);
 
-    el.append(head, advice);
+    el.append(head, advice.body);
     return el;
   }
 }
