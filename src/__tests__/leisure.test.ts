@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   LEISURE_TRIGGER,
   LEISURE_VISITS_PER_CAPACITY,
+  LEISURE_WINDOW_MINUTES,
   TICKS_PER_DAY,
 } from '../config';
 import { idx } from '../core/grid';
@@ -13,7 +14,7 @@ import {
   leisureReport,
   visit,
 } from '../sim/leisure';
-import { isRestDay, restDay } from '../sim/schedule';
+import { inDepartureWindow, isRestDay, leisureMinute, restDay } from '../sim/schedule';
 import { Simulation } from '../sim/simulation';
 import { leisureCapacity } from '../world/buildings';
 import { World } from '../world/world';
@@ -196,6 +197,28 @@ describe('parks and leisure', () => {
       );
     }
     expect(sawResting).toBe(true);
+  });
+
+  it('gives up for a few hours when there is nowhere to go', () => {
+    const world = leisureTown(null);
+    const sim = new Simulation(world);
+    run(sim, TICKS_PER_DAY * 1.5);
+    expect(world.citizens.length).toBeGreaterThan(0);
+
+    // Anybody who could have asked this tick -- at home, out of recreation,
+    // and inside their own window -- has already given up for a while.
+    // Without that they would ask again next tick, and the search reads every
+    // building in the city: a town that has not built a park yet would have
+    // every household scanning the whole town sixteen times a second.
+    const minute = sim.clock.minuteOfDay;
+    const eligible = world.citizens.filter(
+      (c) => c.state === CitizenState.AtHome
+        && c.leisure <= LEISURE_TRIGGER
+        && (isRestDay(c.seed, sim.clock.day)
+          || inDepartureWindow(minute, leisureMinute(c.seed), LEISURE_WINDOW_MINUTES)),
+    );
+    expect(eligible.length).toBeGreaterThan(0);
+    for (const c of eligible) expect(c.nextLeisureTick).toBeGreaterThan(sim.clock.tick);
   });
 
   it('brings people home when the venue is bulldozed under them', () => {

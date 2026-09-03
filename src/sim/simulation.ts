@@ -247,7 +247,16 @@ export class Simulation {
     if (!preferred && !resting) return false;
 
     const venue = chooseVenue(this.world, c, this.policies);
-    if (venue < 0) return false;
+    if (venue < 0) {
+      // Nowhere worth going -- no venues at all, or every one of them full.
+      // Give up for a few hours rather than asking again next tick: the
+      // search reads every building in the city, and a town that has not
+      // built a park yet would otherwise run it for every household at home,
+      // sixteen times a second, for the whole of the opening day. Measured at
+      // six times the cost of a tick with the search suppressed.
+      c.nextLeisureTick = this.clock.tick + LEISURE_RETRY_TICKS;
+      return false;
+    }
     this.beginTrip(c, CitizenState.ToLeisure, c.home, venue);
     return true;
   }
