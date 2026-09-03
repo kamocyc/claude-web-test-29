@@ -198,6 +198,28 @@ describe('parks and leisure', () => {
     expect(sawResting).toBe(true);
   });
 
+  it('brings people home when the venue is bulldozed under them', () => {
+    const world = leisureTown(BuildingType.Park);
+    const sim = new Simulation(world);
+    run(sim, TICKS_PER_DAY * 1.4);
+
+    const park = world.buildings.find((b) => b.type === BuildingType.Park)!;
+    const out = world.citizens.filter(
+      (c) => c.state === CitizenState.ToLeisure || c.state === CitizenState.AtLeisure,
+    );
+    expect(out.length).toBeGreaterThan(0);
+
+    // The one thing that must not happen is somebody left travelling to, or
+    // standing inside, a building that no longer exists.
+    world.bulldoze(park.tile);
+    run(sim, 3000);
+    for (const c of world.citizens) {
+      expect(c.state).not.toBe(CitizenState.ToLeisure);
+      expect(c.state).not.toBe(CitizenState.AtLeisure);
+      expect(c.state).not.toBe(CitizenState.Stranded);
+    }
+  });
+
   it('counts a park as a land value amenity for the ground around it', () => {
     const world = leisureTown(null);
     const sim = new Simulation(world);
