@@ -138,8 +138,22 @@ npm run build   # 型検査 + 本番ビルド
 移植元の街路は格子で建物は軸に平行だったが、こちらの敷地は道に沿って任意の角度を
 向くので、部品を置く最後の 1 か所でまとめて回している。
 
-**夜**は窓が部屋ごとに点いていき、街灯が道に光だまりを落とす。点光源は置かない
+**車と人**も同じ考え方で作る。車は車種5つ＋電車の前後中間の3面を、1形状=1
+InstancedMesh で描く。頂点色は絶対色ではなく**変調係数**なので、`instanceColor` に
+車体色を入れるだけで「白い車の窓は明るい灰、黒い車の窓は真っ黒」が付いてくる。
+ただしガラスだけは頂点属性で変調から外す — 掛け算のままだと黒い車の窓が
+RGB ほぼ 0 に潰れ、昼の路上でも上半分が真っ黒な天蓋になる。ガラスの明るさは
+反射から来なければならない。人は胴と手足を別インスタンスにして、対角の手足を
+1 組の剛体として振る。
+
+**夜**は窓が部屋ごとに点いていき、街灯が道に光だまりを落とし、車は前照灯と
+尾灯を点けて路面に光の板を伸ばす（走行中と停車中で長さを変える。同じ長さだと
+路肩の光が繋がって一本の帯になる）。点光源は置かない
 （数百個の代金に見合わないし、目が読んでいるのは路面の光だまりのほうだ）。
+
+**区画を塗ってまだ建っていない敷地**は、芝ではなく整地した土か構内舗装で描く。
+用途の色を敷くとゲームのデータ構造がそのまま絵になってしまうので、色ではなく
+**素材**を出す。
 
 **接地影**は車と人の足元に敷く板。影マップは 1 テクセル 10cm あり、自己遮蔽避けの
 押し出しもあるので、足元の数十 cm は構造的に必ず抜ける。そこが抜けていると物は浮く。
@@ -167,7 +181,7 @@ src/
                      buildingParts / buildingShapes / style（建物の部品とレシピ）,
                      roofTexture（瓦）, vegetation（樹木）, pedestrianParts（人）,
                      agentMaterial（ガラスと夜の持ち上げ）, groundShadow（接地影）,
-                     instancePool, season
+                     vehicleParts（車と電車の造形）, instancePool, season
   city/              この街そのもの。engine の上に載っている層。
                      world（ネットワーク + 地形 + 導出）, terrain（水面・資源）,
                      scenario（開始時の町）, routing（車線グラフ上の経路探索）,
@@ -179,6 +193,7 @@ src/
                      buildingView / civicView（建物の描画）, nature（植生）,
                      water（水面）, streetLights（街灯）, contactShadows,
                      pedestrians, hud, app, main
+                     （車両の描画は track/render/vehicleView）
   core/ world/ sim/ render/ ui/
                      タイル版（`classic.html`）。3D版は core/types・core/rng と
                      world/buildings（性能表）、ui/window・ui/widgets を共有している。
