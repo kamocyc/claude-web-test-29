@@ -3,11 +3,15 @@ import { BuildTool, type ToolMode } from '../track/app/buildTool';
 import { Viewport } from '../track/app/viewport';
 import { SnapView } from '../track/render/snapView';
 import { NETWORK_CLASSES } from '../track/network/classes';
+import { viewUniforms } from '../track/render/materials';
 import { ZONE_LABELS, ZONE_TYPES, type ZoneType } from '../track/network/zoning';
 import type { BuildingType } from '../core/types';
 import type { CityBuilding } from './buildings';
 import { civicKind, type SiteRefusal } from './civic';
 import { CivicView } from './civicView';
+import { NatureLayer } from './nature';
+import { WaterLayer } from './water';
+import { MAP_SIZE } from '../track/core/units';
 import { applyCity, captureCity, writeSave, type CitySave } from './persistence';
 import { PlanView } from './plan';
 import { seedStartingTown } from './scenario';
@@ -69,6 +73,10 @@ export class CityApp {
   civicType: BuildingType | null = null;
 
   private readonly civicView = new CivicView();
+  /** What grows on the ground the city has not taken. */
+  private readonly nature = new NatureLayer();
+  /** The lakes, as water rather than as blue ground. */
+  private readonly water = new WaterLayer();
 
   /** A place to ring because a warning or a panel asked to be shown. */
   private focus: Vector3 | null = null;
@@ -101,6 +109,9 @@ export class CityApp {
     );
     this.viewport.scene.add(this.tool.previewGroup);
     this.viewport.scene.add(this.civicView.group);
+    this.viewport.scene.add(this.nature.group);
+    this.viewport.scene.add(this.water.group);
+    this.water.build(this.world.field, MAP_SIZE);
 
     if (options.save) {
       applyCity(this.world, this.sim, options.save);
@@ -114,6 +125,8 @@ export class CityApp {
     }
     this.plan.centerOn(this.centre.x, this.centre.z);
     this.lookAt(this.centre.x, this.centre.z, 520);
+    // Put the overlays in step with the tool the app opens holding.
+    this.setMode(this.tool.mode);
   }
 
   // ------------------------------------------------------------------ civic
@@ -245,6 +258,10 @@ export class CityApp {
     this.tool.setMode(mode);
     this.world.builder.setZoneView(mode === 'zone');
     this.world.builder.setLineView(mode === 'line');
+    // Contours are a surveyor's overlay, not scenery. Drawn all the time they
+    // make the ground read as a map rather than as ground -- which is exactly
+    // what the light and the palette are there to stop.
+    viewUniforms.uContour.value = mode === 'build' || mode === 'station' ? 10 : 0;
   }
 
   setZone(zone: ZoneType | null): void {
@@ -278,6 +295,8 @@ export class CityApp {
     // Cheap: it compares what is standing with what was drawn and returns at
     // once when nothing has changed, which is almost every frame.
     this.civicView.update(this.sim.buildings, this.world.field);
+    this.nature.update(this.world, this.sim.day, this.viewport.controls.target);
+    this.water.update(this.viewport.atmosphere, this.viewport.sunDirection, this.clock);
     this.clock = this.world.traffic.time;
     // The sky is the city's own clock. Nothing else in the scene knows what
     // time it is, so the light, the fog, the exposure and the colour grade all

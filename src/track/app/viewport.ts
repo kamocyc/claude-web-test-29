@@ -45,7 +45,8 @@ export class Viewport {
   readonly fx: PostFx;
   /** いまの大気。時刻から連続で作る。 */
   readonly atmosphere: Atmosphere = atmosphereAt(0.5);
-  private readonly sunDir = new Vector3(0, 1, 0);
+  /** Where the sun is now. The water reflects it, so it is not private. */
+  readonly sunDirection = new Vector3(0, 1, 0);
   private elapsed = 0;
   private lastFrameAt = performance.now();
   private readonly raycaster = new Raycaster();
@@ -118,7 +119,7 @@ export class Viewport {
    */
   setTimeOfDay(dayFraction: number): void {
     const atmo = atmosphereAt(dayFraction, this.atmosphere);
-    sunDirection(dayFraction, this.sunDir);
+    sunDirection(dayFraction, this.sunDirection);
 
     this.sun.color.copy(atmo.sunColor);
     this.sun.intensity = atmo.sunIntensity;
@@ -162,9 +163,9 @@ export class Viewport {
     const t = this.controls.target;
     // 光の向きは時刻から来る。影が朝は長く西へ、夕は長く東へ伸びる。
     this.sun.position.set(
-      t.x + this.sunDir.x * 320,
-      t.y + Math.max(40, this.sunDir.y * 320),
-      t.z + this.sunDir.z * 320,
+      t.x + this.sunDirection.x * 320,
+      t.y + Math.max(40, this.sunDirection.y * 320),
+      t.z + this.sunDirection.z * 320,
     );
     this.sun.target.position.copy(t);
     this.sun.target.updateMatrixWorld();
@@ -288,7 +289,7 @@ export class Viewport {
     // 空は視点に付いて回る。置いたままにすると、引いたときにドームの縁が
     // 空の中に見えてしまう。
     this.elapsed = performance.now() / 1000;
-    this.sky.update(this.atmosphere, this.sunDir, this.camera.position, this.elapsed);
+    this.sky.update(this.atmosphere, this.sunDirection, this.camera.position, this.elapsed);
     this.updateShadowCamera();
     this.fx.setAoScale(this.viewDistance);
     const now = performance.now();

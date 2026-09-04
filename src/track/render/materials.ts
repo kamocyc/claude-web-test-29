@@ -10,9 +10,16 @@ export const viewUniforms = {
   /** 1 で診断表示 (勾配・曲率の色分け) を有効にする。 */
   uDiagnostics: { value: 0 },
   /** 地形の等高線の間隔 [m]。0 で非表示。 */
-  uContour: { value: 10 },
+  uContour: { value: 0 },
   /** 1 で地形を傾斜のヒートマップにする。 */
   uSlopeHeat: { value: 0 },
+  /**
+   * 水面の高さ [m]。砂浜はここを基準に出す。
+   *
+   * 以前は「高さ 0 から 2.2m までが砂」という決め打ちで、水面が 0 でない
+   * この世界では湖のまわり一帯が巨大な砂地になっていた。
+   */
+  uWaterLevel: { value: 0 },
 };
 
 /**
@@ -148,6 +155,7 @@ export function createTerrainMaterial(): MeshStandardMaterial {
   material.onBeforeCompile = (shader: WebGLProgramParametersWithUniforms) => {
     shader.uniforms.uContour = viewUniforms.uContour;
     shader.uniforms.uSlopeHeat = viewUniforms.uSlopeHeat;
+    shader.uniforms.uWaterLevel = viewUniforms.uWaterLevel;
     shader.vertexShader = shader.vertexShader
       .replace(
         '#include <common>',
@@ -168,6 +176,7 @@ vWorldNormal = normalize(mat3(modelMatrix) * objectNormal);`,
         `#include <common>
 uniform float uContour;
 uniform float uSlopeHeat;
+uniform float uWaterLevel;
 varying vec3 vWorldPos;
 varying vec3 vWorldNormal;
 
@@ -179,18 +188,72 @@ vec3 slopeHeat(float slopeDeg) {
   return t < 0.5 ? mix(flat0, mid, t * 2.0) : mix(mid, steep, (t - 0.5) * 2.0);
 }
 
-vec3 terrainColor(float slopeDeg, float height) {
-  vec3 grass = vec3(0.28, 0.45, 0.19);
-  vec3 grassDry = vec3(0.40, 0.47, 0.23);
-  vec3 dirt = vec3(0.44, 0.35, 0.22);
-  vec3 rock = vec3(0.42, 0.41, 0.40);
-  vec3 sand = vec3(0.66, 0.61, 0.46);
+// ------- 地面の色 (移植先で足した: 移植元 claude-web-test-21 の groundPalette) -------
+//
+// 以前はここが「標高と傾斜で 5 色を混ぜる」だけで、平野が丸ごと 1 色の
+// オリーブになっていた。見下ろしのゲームでは画面の大半が地面なので、
+// そこに情報が 1 つも無いと、建物をどれだけ作り込んでも絵が完成しない。
+//
+// 層は 4 つ。標高で草の質を変え、乾湿のまだらを乗せ、乾ききった所は
+// 土を透かし、急斜面と水際で素材そのものを変える。まだらは**世界座標の
+// ノイズ**から引くので、メッシュをどう割っても模様は連続する。
+float hash21(vec2 p) {
+  p = fract(p * vec2(123.34, 456.21));
+  p += dot(p, p + 45.32);
+  return fract(p.x * p.y);
+}
 
-  vec3 c = mix(grass, grassDry, clamp(height / 60.0, 0.0, 1.0));
-  c = mix(c, dirt, smoothstep(14.0, 27.0, slopeDeg));
-  c = mix(c, rock, smoothstep(29.0, 42.0, slopeDeg));
-  // 水際だけ砂浜にする。
-  c = mix(sand, c, smoothstep(0.0, 1.6, height));
+float valueNoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  float a = hash21(i);
+  float b = hash21(i + vec2(1.0, 0.0));
+  float c = hash21(i + vec2(0.0, 1.0));
+  float d = hash21(i + vec2(1.0, 1.0));
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+vec3 terrainColor(float slopeDeg, float height, vec2 world) {
+  // 草。低地は水気のある緑、台地は乾いて灰色寄り。標高だけで決めると
+  // 平野が 1 色になるので、ノイズを混ぜて境目を溶かす。
+  vec3 grassLow = vec3(0.435, 0.549, 0.322);
+  vec3 grassHigh = vec3(0.494, 0.541, 0.361);
+  vec3 grassDry = vec3(0.553, 0.529, 0.376);
+  vec3 grassWet = vec3(0.353, 0.478, 0.275);
+  vec3 soil = vec3(0.541, 0.455, 0.322);
+  vec3 rock = vec3(0.420, 0.404, 0.365);
+  vec3 sand = vec3(0.784, 0.722, 0.580);
+
+  float n1 = valueNoise(world * 0.011);
+  float n2 = valueNoise(world * 0.043 + 31.7);
+  float mottle = clamp(n1 * 0.65 + n2 * 0.35, 0.0, 1.0);
+
+  float alt = clamp(height / 90.0 + (mottle - 0.5) * 0.4, 0.0, 1.0);
+  vec3 c = mix(grassLow, grassHigh, alt);
+
+  // 乾湿。中点からの距離で両側へ振る。片側ずつ足すと、ノイズの実レンジに
+  // 対して傾きが急すぎて片方が飽和し、2 素材あるのに 1 色しか出ない。
+  float dry = clamp((mottle - 0.35) / 0.4, 0.0, 1.0);
+  c = dry > 0.5
+    ? mix(c, grassDry, (dry - 0.5) * 2.0 * 0.8)
+    : mix(c, grassWet, (0.5 - dry) * 2.0 * 0.72);
+
+  // 乾ききった所は地肌が透ける。明度ではなく素材を混ぜるので、
+  // 引きの画でも「色の違う土地」として読める。
+  float scalp = clamp((dry - 0.72) * 3.4, 0.0, 1.0);
+  c = mix(c, soil, scalp * 0.3);
+
+  // 傾斜。地形分類ではなく傾斜で決めるのが肝で、「山地」ではない急斜面
+  // (河岸段丘・丘の縁) にも岩が出る。ノイズを足すのは、傾斜だけだと
+  // 平らな山頂が一面の同じ灰色になり、巨大な板に見えるため。
+  float bare = clamp((slopeDeg - 24.0) / 26.0 + (mottle - 0.5) * 0.44, 0.0, 1.0);
+  c = mix(c, soil, smoothstep(0.0, 0.55, bare) * 0.55);
+  c = mix(c, rock, smoothstep(0.45, 1.0, bare) * 0.85);
+
+  // 水際だけ砂浜にする。水面からの高さで見るので、水面が 0 でない世界でも
+  // 帯の幅は変わらない。
+  c = mix(sand, c, smoothstep(0.0, 2.4, height - uWaterLevel));
   return c;
 }`,
       )
@@ -199,7 +262,7 @@ vec3 terrainColor(float slopeDeg, float height) {
         `#include <color_fragment>
 {
   float slopeDeg = degrees(acos(clamp(normalize(vWorldNormal).y, -1.0, 1.0)));
-  vec3 base = terrainColor(slopeDeg, vWorldPos.y);
+  vec3 base = terrainColor(slopeDeg, vWorldPos.y, vWorldPos.xz);
   base = mix(base, slopeHeat(slopeDeg), uSlopeHeat);
 
   if (uContour > 0.0) {

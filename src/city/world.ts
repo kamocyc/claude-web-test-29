@@ -6,8 +6,8 @@ import { WorldBuilder, type BuildResult } from '../track/render/worldBuilder';
 import { DEFAULT_TERRAIN, generateTerrain } from '../track/terrain/generator';
 import { Heightfield } from '../track/terrain/heightfield';
 import { TerrainMesh } from '../track/terrain/terrainMesh';
-import { createTerrainMaterial } from '../track/render/materials';
-import { CityTerrain } from './terrain';
+import { createTerrainMaterial, viewUniforms } from '../track/render/materials';
+import { CityTerrain, WATER_LEVEL } from './terrain';
 
 /**
  * The city's world: the ground, the network laid on it, and everything the
@@ -66,6 +66,9 @@ export class CityWorld {
     // citizens': every car with somewhere to go is somebody's. Left at the
     // engine's own density the two would double-count the same road.
     this.builder.traffic.setAmbient(AMBIENT_TRAFFIC);
+    // The terrain shader draws its beach from the waterline, and this world's
+    // waterline is not at zero.
+    viewUniforms.uWaterLevel.value = WATER_LEVEL;
   }
 
   /** What the player painted, kept across re-laying. */
