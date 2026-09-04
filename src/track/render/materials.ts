@@ -4,6 +4,7 @@ import {
   MeshStandardMaterial,
   type WebGLProgramParametersWithUniforms,
 } from 'three';
+import { applySurfaceNoise, type SurfaceNoiseOptions } from '../../look/surfaceNoise';
 
 /** 表示モードを切り替えるための共有 uniform。 */
 export const viewUniforms = {
@@ -135,9 +136,17 @@ if (uBlocked > 0.5) {
 }`,
       );
   };
+  // 透けるプレビューにはノイズを掛けない (半透明の板がざらつくと、
+  // 敷ける／敷けないの色が読みにくくなるだけ)。
+  const noised = !(options?.transparent ?? false);
+  if (noised) addSurfaceNoise(material, ASPHALT_NOISE);
+
   // uniform の束ね方が違うマテリアル同士でプログラムを共有しないよう、
-  // 診断 uniform を差し替えた場合はキーも変える。
-  const key = options?.diagnostics ? 'surface-diag-forced' : 'surface-diag';
+  // 診断 uniform を差し替えた場合はキーも変える。ノイズの有無も同じ理由で
+  // キーに入れる -- 入れないと、ノイズ入りと素の材質が同じコンパイル済み
+  // プログラムを共有して、どちらか一方の差し込みが黙って効かなくなる。
+  const key = (options?.diagnostics ? 'surface-diag-forced' : 'surface-diag')
+    + (noised ? ':noise' : '');
   material.customProgramCacheKey = () => key;
   return material;
 }
@@ -287,6 +296,49 @@ vec3 terrainColor(float slopeDeg, float height, vec2 world) {
   material.customProgramCacheKey = () => 'terrain-slope';
   return material;
 }
+
+/**
+ * 既にシェーダを差し込んである材質へ、さらに路面ノイズを重ねる (移植先で足した)。
+ *
+ * `applySurfaceNoise` は `onBeforeCompile` を**上書き**するので、そのまま
+ * 呼ぶと診断表示の差し込みが消える。両方を順に呼ぶ形に包み直し、
+ * プログラムのキャッシュキーも 2 つ分を繋いでおく (片方だけ違う材質同士で
+ * コンパイル済みプログラムを共有すると、片方の差し込みが効かなくなる)。
+ */
+function addSurfaceNoise(material: MeshStandardMaterial, options: SurfaceNoiseOptions): void {
+  const firstHook = material.onBeforeCompile;
+  const firstKey = material.customProgramCacheKey;
+  applySurfaceNoise(material, options);
+  const noiseHook = material.onBeforeCompile;
+  const noiseKey = material.customProgramCacheKey;
+  material.onBeforeCompile = (shader, renderer) => {
+    firstHook.call(material, shader, renderer);
+    noiseHook.call(material, shader, renderer);
+  };
+  material.customProgramCacheKey = () =>
+    `${firstKey.call(material)}|${noiseKey.call(material)}`;
+}
+
+/**
+ * 舗装のざらつき。
+ *
+ * 路面が一色の板に見える原因は、モデルの粗さではなく**1 つの面の中に情報が
+ * 1 つも無いこと**にある。眼の高さでは画面の 3〜4 割が路面なので、そこが
+ * 一色だとカット全体が未完成に見える。値は移植元のまま。
+ */
+const ASPHALT_NOISE: SurfaceNoiseOptions = {
+  scale: 3.4,
+  color: 0.14,
+  roughness: 0.2,
+  bump: 0.05,
+  fade: 240,
+  // 舗装の打ち継ぎ。4.6m は 1 車線ぶんの敷き幅。
+  seam: { spacing: 4.6, width: 0.17, darken: 0.13 },
+  // 環境マップは遮蔽を持たないので、街路の路面が「見渡す限りの空」を
+  // 映してしまい、反射率 3% のアスファルトが 27% の明るさで描かれる。
+  // 上を向いた面の間接鏡面だけ落とすのが、いちばん安い近似。
+  specular: 0.2,
+};
 
 /** 路面標示など、路面のすぐ上に重ねる薄い面のマテリアル。 */
 export function createOverlayMaterial(): MeshStandardMaterial {

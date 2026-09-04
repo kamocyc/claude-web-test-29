@@ -12,6 +12,7 @@ import { BuildingView } from './buildingView';
 import { CivicView } from './civicView';
 import { NatureLayer } from './nature';
 import { ContactShadows } from './contactShadows';
+import { Pedestrians } from './pedestrians';
 import { StreetLights } from './streetLights';
 import { WaterLayer } from './water';
 import { MAP_SIZE } from '../track/core/units';
@@ -93,6 +94,8 @@ export class CityApp {
   private readonly lamps = new StreetLights();
   /** The dark patch under each car, without which they hover. */
   private readonly contact = new ContactShadows();
+  /** The people the city has always simulated and never drawn. */
+  private readonly pedestrians = new Pedestrians();
 
   /** A place to ring because a warning or a panel asked to be shown. */
   private focus: Vector3 | null = null;
@@ -130,6 +133,7 @@ export class CityApp {
     this.viewport.scene.add(this.water.group);
     this.viewport.scene.add(this.lamps.group);
     this.viewport.scene.add(this.contact.group);
+    this.viewport.scene.add(this.pedestrians.group);
     this.water.build(this.world.field, MAP_SIZE);
 
     if (options.save) {
@@ -325,6 +329,8 @@ export class CityApp {
       this.viewport.controls.target,
       this.viewport.atmosphere.nightAmount,
     );
+    this.pedestrians.update(this.world, this.sim.citizens, this.viewport.controls.target);
+    this.pedestrians.setAtmosphere(this.viewport.atmosphere);
     this.clock = this.world.traffic.time;
     // The sky is the city's own clock. Nothing else in the scene knows what
     // time it is, so the light, the fog, the exposure and the colour grade all
