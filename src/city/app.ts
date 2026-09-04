@@ -11,6 +11,7 @@ import { civicKind, type SiteRefusal } from './civic';
 import { BuildingView } from './buildingView';
 import { CivicView } from './civicView';
 import { NatureLayer } from './nature';
+import { ContactShadows } from './contactShadows';
 import { StreetLights } from './streetLights';
 import { WaterLayer } from './water';
 import { MAP_SIZE } from '../track/core/units';
@@ -90,6 +91,8 @@ export class CityApp {
   private readonly water = new WaterLayer();
   /** The lamps, which are what a city at night is made of. */
   private readonly lamps = new StreetLights();
+  /** The dark patch under each car, without which they hover. */
+  private readonly contact = new ContactShadows();
 
   /** A place to ring because a warning or a panel asked to be shown. */
   private focus: Vector3 | null = null;
@@ -126,6 +129,7 @@ export class CityApp {
     this.viewport.scene.add(this.nature.group);
     this.viewport.scene.add(this.water.group);
     this.viewport.scene.add(this.lamps.group);
+    this.viewport.scene.add(this.contact.group);
     this.water.build(this.world.field, MAP_SIZE);
 
     if (options.save) {
@@ -316,6 +320,11 @@ export class CityApp {
     this.water.update(this.viewport.atmosphere, this.viewport.sunDirection, this.clock);
     this.lamps.update(this.world, this.viewport.controls.target);
     this.lamps.setNight(this.viewport.atmosphere.nightAmount);
+    this.contact.update(
+      this.world.traffic.vehicles,
+      this.viewport.controls.target,
+      this.viewport.atmosphere.nightAmount,
+    );
     this.clock = this.world.traffic.time;
     // The sky is the city's own clock. Nothing else in the scene knows what
     // time it is, so the light, the fog, the exposure and the colour grade all
