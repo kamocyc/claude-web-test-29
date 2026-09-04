@@ -1,5 +1,11 @@
 import { Vector3 } from 'three';
 import { Rng } from '../core/rng';
+import {
+  DEFAULT_SPEED,
+  OPENING_MINUTE,
+  simMinutes,
+  SPEEDS,
+} from './clock';
 import { BuildingType } from '../core/types';
 import { specFor } from '../world/buildings';
 import type { Vehicle } from '../track/sim/traffic';
@@ -24,9 +30,10 @@ import {
 } from './citizens';
 import { Treasury, type TreasurySave } from './economy';
 import {
+  accessFor,
   civicKind,
+  CivicIndex,
   coveredLots,
-  servicesAt,
   siteRefusal,
   type SiteRefusal,
 } from './civic';
@@ -62,26 +69,13 @@ import type { CityWorld } from './world';
  * -- which is what stops a city that is fine at x1 from failing at x10.
  */
 
-/**
- * Sim minutes per second of world time at x1.
- *
- * This is the exchange rate between the clock and the physics, and it is the
- * one number that decides whether a commute reads as a commute. The vehicles
- * move at real speeds -- a small road is 12 m/s -- so at one minute per second
- * a kilometre of driving took eighty minutes of the day and a five hundred
- * metre walk took six hours, which is not a city, it is a diorama with a
- * broken clock. At a sixth of that, a drive across the town is a quarter of an
- * hour and the walk is an hour: still generous to the car, but the shape of a
- * real journey, and the shape is what the player is deciding about.
- *
- * A day is 8640 seconds of world time, which is two and a half hours at x1 and
- * under five minutes at x30 -- hence the two fast settings.
- */
-export const SIM_MINUTES_PER_SECOND = 1 / 6;
-
-/** Pause, slow, normal, fast, very fast. */
-export const SPEEDS = [0, 1, 3, 10, 30] as const;
-export const DEFAULT_SPEED = 3;
+export {
+  DEFAULT_SPEED,
+  OPENING_MINUTE,
+  SIM_MINUTES_PER_SECOND,
+  simMinutes,
+  SPEEDS,
+} from './clock';
 
 /** The traffic model integrates at no more than this [s]. */
 const TRAFFIC_MAX_STEP = 0.1;
@@ -112,8 +106,8 @@ const UNHAPPY_THRESHOLD = 30;
 /** A commute this long [sim minutes] scores nothing. */
 const COMMUTE_MISERY = 75;
 
-/** The time of day a new city opens at [sim minutes]. */
-export const OPENING_MINUTE = 6 * 60;
+/** How many vacancies somebody looks at before taking one. */
+const JOB_SEARCH_LOOKS = 24;
 
 /** A trip still going after this long [sim minutes] is given up on. */
 const ABANDON_AFTER = 240;
@@ -248,26 +242,37 @@ export class CitySimulation {
    * one-second jumps drives through the car in front.
    */
   step(dt: number): void {
-    const multiplier = SPEEDS[this.speed];
-    if (multiplier === 0) return;
-    const worldSeconds = dt * multiplier;
-
+    // Before the pause check, not after. The player can lay a road while the
+    // city is paused, and the world is rebuilt for it either way; if the city
+    // does not notice, its buildings keep pointing at plots that have moved,
+    // the renderer draws them on the wrong ones, and the road is free until
+    // the clock starts again.
     if (this.world.revision !== this.lastWorldRevision) {
       this.lastWorldRevision = this.world.revision;
       this.onWorldChanged();
     }
 
+    const multiplier = SPEEDS[this.speed];
+    if (multiplier === 0) return;
+    const worldSeconds = dt * multiplier;
+
+    // The traffic is sliced because an IDM integrated in one-second jumps
+    // drives through the car in front. Walking and boarding are not: a walk
+    // covers the same ground whether it is added in one piece or fifteen, and
+    // a train stands at its platform for whole seconds, so looking once a
+    // frame cannot miss it. Doing them per slice was fifteen passes over
+    // every traveller and every vehicle for no difference in the result.
     let remaining = worldSeconds;
     while (remaining > 1e-4) {
       const slice = Math.min(TRAFFIC_MAX_STEP, remaining);
       this.world.traffic.step(slice);
-      this.advanceWalkers(slice);
-      this.advanceRiders();
       remaining -= slice;
     }
+    this.advanceWalkers(worldSeconds);
+    this.advanceRiders();
 
     const before = this.minutes;
-    this.minutes += worldSeconds * SIM_MINUTES_PER_SECOND;
+    this.minutes += simMinutes(worldSeconds);
     this.runSchedules();
     this.runCity(before);
     this.sample();
@@ -291,6 +296,14 @@ export class CitySimulation {
     // one corner, and the station at the other end of town never sees a
     // passenger because nobody lives or works near it. Deterministic, from the
     // city's own generator, so a seed still builds the same town.
+    // The city's own buildings keep their place but not their doorway: the
+    // street they were entered from may have been split, moved or taken up.
+    for (const building of this.buildings) {
+      if (building.alive && civicKind(building.type)) {
+        building.access = accessFor(this.world, building.at);
+      }
+    }
+
     // The plots the city's own buildings stand on are not for sale.
     const covered = coveredLots(this.world, this.buildings);
     this.freeLots = this.rng.shuffled(free.filter((i) => !covered.has(i)));
@@ -410,7 +423,12 @@ export class CitySimulation {
     // and walks the whole way if there is not; somebody with a car takes the
     // train only when it is genuinely quicker than driving. That is the whole
     // reason to build a line: it has to beat the road on its merits.
-    const drive = route.seconds / 60;
+    // Both sides in the city's own minutes. The route's cost is in seconds of
+    // world time, which is a different unit from the journey estimate, and
+    // dividing by sixty here (as if a world second were a real second) made a
+    // drive look a tenth as long as it is -- so no car owner ever took a
+    // train, whatever the traffic was doing.
+    const drive = simMinutes(route.seconds);
     const journey = citizen.hasCar || this.transitOffered(citizen)
       ? planJourney(this.world, from, to)
       : null;
@@ -446,6 +464,7 @@ export class CitySimulation {
       route.lanes,
       this.startOffset(route),
       (v) => this.arrive(citizen, v),
+      { endS: route.endS },
     );
     if (vehicle) citizen.vehicle = vehicle.id;
     // No room at the kerb this instant: wait a beat and try again, rather
@@ -501,17 +520,27 @@ export class CitySimulation {
   private advanceRiders(): void {
     const vehicles = this.world.traffic.vehicles;
     const byId = new Map<number, Vehicle>();
-    for (const vehicle of vehicles) byId.set(vehicle.id, vehicle);
+    // Trains with their doors open, by the platform they are open at. Built
+    // once: asking the whole fleet "is any of you at my station" per waiting
+    // passenger is the platform queue times the fleet, and both are at their
+    // largest at the same moment.
+    const atPlatform = new Map<string, Vehicle>();
+    for (const vehicle of vehicles) {
+      byId.set(vehicle.id, vehicle);
+      if (vehicle.line && vehicle.dwellUntil !== undefined && vehicle.lastStation !== undefined) {
+        atPlatform.set(`${vehicle.line.id}:${vehicle.lastStation}`, vehicle);
+      }
+    }
 
     for (const citizen of this.citizens) {
       const journey = citizen.journey;
       if (!journey) continue;
 
       if (journey.leg === JourneyLeg.Waiting) {
-        const train = vehicles.find(
-          (v) => isBoardable(v, journey.line, journey.board)
-            && (this.riders.get(v.id) ?? 0) < capacityOf(v),
-        );
+        const waiting = atPlatform.get(`${journey.line}:${journey.board}`);
+        const train = waiting && (this.riders.get(waiting.id) ?? 0) < capacityOf(waiting)
+          ? waiting
+          : undefined;
         if (train) {
           this.riders.set(train.id, (this.riders.get(train.id) ?? 0) + 1);
           citizen.vehicle = train.id;
@@ -703,24 +732,39 @@ export class CitySimulation {
     }
     this.world.builder.builtLots = built;
     this.world.builder.refreshBuildings();
+    // The engine counts plots a building could stand on; from here on the
+    // figure is what the city has actually built, so the stats window and the
+    // top bar cannot disagree about how many buildings there are.
+    const stats = this.world.result?.stats;
+    if (stats) stats.buildings = built.size;
   }
 
   /** Everybody without a job takes one, nearest-ish first. */
   private assignJobs(): void {
-    const openings = this.buildings.filter((b) => b.alive && isWorkplace(b) && hasVacancy(b));
+    // The vacancy list is kept, not rebuilt per jobseeker: a building leaves
+    // it when its last seat goes. Re-filtering it inside the loop was O(people
+    // x workplaces) and, worse, the first forty entries were the *oldest*
+    // workplaces rather than the nearest ones -- so a new outer district got
+    // no workers at all until the original downtown was full.
+    let openings = this.buildings.filter((b) => b.alive && isWorkplace(b) && hasVacancy(b));
     if (openings.length === 0) return;
+
     for (const citizen of this.citizens) {
       if (citizen.work >= 0 && this.buildings[citizen.work]?.alive) continue;
       const home = this.buildings[citizen.home];
       if (!home?.alive) continue;
+      if (openings.length === 0) return;
+
       // Weighted towards the near ones rather than always the nearest: strict
       // nearest-first puts everybody a block from home and no road ever
-      // carries anybody, which is the mistake the tile city made first.
-      const pool = openings.filter(hasVacancy).slice(0, 40);
-      if (pool.length === 0) return;
+      // carries anybody, which is the mistake the tile city made first. The
+      // shortlist is a random sample of the vacancies, so every district is
+      // reachable however long the list gets.
       let best: CityBuilding | null = null;
       let bestScore = -Infinity;
-      for (const candidate of pool) {
+      const looks = Math.min(openings.length, JOB_SEARCH_LOOKS);
+      for (let i = 0; i < looks; i++) {
+        const candidate = openings[this.rng.int(openings.length)];
         const d = candidate.at.distanceTo(home.at);
         const score = -d * (0.6 + this.rng.next() * 0.8);
         if (score > bestScore) {
@@ -731,11 +775,15 @@ export class CitySimulation {
       if (!best) return;
       best.occupants.push(citizen.id);
       citizen.work = best.id;
+      if (!hasVacancy(best)) openings = openings.filter((b) => b !== best);
     }
   }
 
   /** How everybody feels, and how long their last trip took. */
   private updateWellbeing(): void {
+    // One index for the whole pass rather than a scan of every building per
+    // person per kind: this runs over the entire population every sim hour.
+    const civic = new CivicIndex(this.buildings);
     for (const citizen of this.citizens) {
       const employed = citizen.work >= 0 && (this.buildings[citizen.work]?.alive ?? false);
       const housed = this.buildings[citizen.home]?.alive ?? false;
@@ -764,8 +812,8 @@ export class CitySimulation {
       // nowhere to go is visibly worse to live in, not so much that services
       // alone can paper over a commute nobody can make.
       const home = this.buildings[citizen.home];
-      const services = home?.alive
-        ? servicesAt(this.buildings, home.at)
+      const services = home?.alive && !civic.isEmpty
+        ? civic.servicesAt(home.at)
         : { health: 0, safety: 0, education: 0, leisure: 0 };
       const served = services.health * 7
         + services.safety * 5
@@ -792,6 +840,11 @@ export class CitySimulation {
   private migrate(): void {
     for (const citizen of this.citizens) {
       if (citizen.unhappyHours < PATIENCE_HOURS) continue;
+      // Somebody who leaves mid-journey has to get off the train first. A
+      // line train is long-lived -- it is re-used run after run -- so a seat
+      // never given back is a seat lost for good, and an unhappy city can
+      // fill one to its capacity and quietly stop carrying anybody.
+      if (citizen.vehicle >= 0) this.alight(citizen);
       this.detach(citizen);
       citizen.left = true;
     }
@@ -945,7 +998,7 @@ export class CitySimulation {
       zone: 'commercial',
       at: at.clone(),
       lot: -1,
-      access: null,
+      access: accessFor(this.world, at),
       capacity: spec.capacity,
       occupants: [],
       alive: true,

@@ -71,6 +71,14 @@ export interface Vehicle {
    * これが付いている車両は経路を伸ばされず、終点で降ろされる。
    */
   trip?: {
+    /**
+     * 目的地の位置 (`route[0]` の起点から測った距離 [m])。
+     *
+     * 建物の前であって、経路の終わりではない。これが無いと「最後の車線の
+     * 終わり」まで走らないと着いたことにならず、この街では 50〜70 m 行き
+     * 過ぎることになる。
+     */
+    stopAt: number;
     /** 着いたら呼ばれる。市民はここで「着いた」ことにする。 */
     onArrive: (vehicle: Vehicle) => void;
     /** 着いたか。1 フレームのうちに二度呼ばないための印。 */
@@ -130,7 +138,7 @@ const ARRIVAL_REACH = 4;
 const STUCK_LIMIT = 25;
 
 /**
- * これだけ動けないままだった車は、交差点の取り合いを見送って進む [s] (移植先で足した)。
+ * これだけ動けないままだった車は、合流先の空き待ちを見送って進む [s] (移植先で足した)。
  *
  * 普通の渋滞待ちより長く、街が止まったままになるより短い。
  */
@@ -261,7 +269,14 @@ export class Traffic {
     route: readonly number[],
     startS: number,
     onArrive: (vehicle: Vehicle) => void,
-    options: { kind?: VehicleKind; size?: BodySize; cars?: number; color?: RGB } = {},
+    options: {
+      kind?: VehicleKind;
+      size?: BodySize;
+      cars?: number;
+      color?: RGB;
+      /** 最後の車線での目的地の位置 [m]。省略すると経路の終わり。 */
+      endS?: number;
+    } = {},
   ): Vehicle | null {
     if (route.length === 0) return null;
     const first = this.graph.lanes[route[0]];
@@ -273,8 +288,12 @@ export class Traffic {
     const length = cars * size.length + (cars - 1) * COUPLING;
     const head = Math.max(length + 0.5, Math.min(startS, first.path.length - 0.5));
     // Somebody already sitting where this car would appear: try again later
-    // rather than materialise inside them.
-    if (!this.isClear(route[0], Math.max(0, head - length - 1), length + 1)) return null;
+    // rather than materialise inside them. Both ends are absolute positions on
+    // the lane -- the tail and the head. Passing the car's *length* as the
+    // second one probed a point near the top of the street instead of where
+    // the car is going, so one car queued at the head of a road stopped every
+    // household further down it from setting off at all.
+    if (!this.isClear(route[0], Math.max(0, head - length - 1), head)) return null;
 
     const vehicle: Vehicle = {
       id: this.nextId++,
@@ -286,7 +305,7 @@ export class Traffic {
       cars,
       color: options.color ?? CAR_COLORS[this.nextId % CAR_COLORS.length],
       bodies: [],
-      trip: { onArrive },
+      trip: { stopAt: this.doorAt(route, options.endS), onArrive },
     };
     this.updateBodies(vehicle);
     this.vehicles.push(vehicle);
@@ -467,15 +486,20 @@ export class Traffic {
           lane.phase === undefined ? 0 : signalStateAt(this.time, lane.phase);
 
         // 進路の取り合い。合流先に空きが無い / 交わる進路に誰かいる。
+        const crossed = lane.conflicts.some((c) => occupied.has(c));
+
+        // 長く詰まりきった車には、**合流先の空き待ちだけ**を見送らせる
+        // (移植先で足した)。交差点の中で止まった車は、その進路を押さえたまま
+        // 動けない。それが一巡すると誰も譲れなくなり、街ぜんぶの車が永久に
+        // 止まる -- 開始時の町でも 5 分で起きた。出口待ちを見送れば、詰まった
+        // 車が交差点から抜けて輪が解ける。
         //
-        // 長く詰まりきった車には、この取り合いを見送らせる (移植先で足した)。
-        // 交差点の中で止まった車は、その進路を押さえたまま動けない。それが
-        // 一巡すると誰も譲れなくなり、街ぜんぶの車が永久に止まる -- 開始時の
-        // 町でも 5 分で起きた。前車追従はそのまま効いているので、譲らせても
-        // 重なることはなく、詰まりが一台ずつ解けていく。列車が詰まったときに
-        // 降ろすのと同じ趣旨の逃げ道。
+        // 交わる進路の取り合いは見送らせない。前車追従は自分の経路上しか
+        // 見ないので、横から来る車は見えていない。ここまで見送らせると、
+        // 「詰まったから」という理由で横断中の車を突き抜けていく
+        // (実際に車体中心が 0.85 m まで近づいた)。
         const wedged = (vehicle.stuckFor ?? 0) > GRIDLOCK_RELIEF;
-        const busy = !wedged && (free < room || lane.conflicts.some((c) => occupied.has(c)));
+        const busy = crossed || (free < room && !wedged);
 
         if (vehicle.commit === lane.id) {
           // 決めたあとでも、まだ止まれるうちに赤や取り合いに気付いたら
@@ -606,7 +630,30 @@ export class Traffic {
 
   /** 経路の終わりまでの距離 [m]。延長できるならまだ余裕がある。 */
   private remaining(vehicle: Vehicle): number {
-    return this.routeLength(vehicle) - vehicle.head;
+    return this.stopLength(vehicle) - vehicle.head;
+  }
+
+  /**
+   * この車両にとっての「経路の終わり」[m] (移植先で足した)。
+   *
+   * 行き先のある車両では建物の前、それ以外では経路の終わり。止まる所も
+   * 着いた判定もここを見るので、行き過ぎることも、手前で降りることもない。
+   */
+  private stopLength(vehicle: Vehicle): number {
+    return vehicle.trip ? vehicle.trip.stopAt : this.routeLength(vehicle);
+  }
+
+  /** 経路上の目的地の位置 [m]。`endS` は最後の車線での位置。 */
+  private doorAt(route: readonly number[], endS?: number): number {
+    let total = 0;
+    for (let i = 0; i < route.length; i++) {
+      const length = this.graph.lanes[route[i]]?.path.length ?? 0;
+      if (i === route.length - 1) {
+        return total + (endS === undefined ? length : clamp(endS, 0, length));
+      }
+      total += length;
+    }
+    return total;
   }
 
   /** いま持っている経路の長さ [m]。 */
@@ -764,6 +811,10 @@ export class Traffic {
       if (this.tailOf(vehicle) < first) return;
       vehicle.route.shift();
       vehicle.head -= first;
+      // 行き先も同じだけずらす。`head` と同じ原点で測っているので、
+      // 片方だけ動かすと目的地が遠ざかり続け、車は着かないまま経路の
+      // 終わりを走り抜けて終点に積み上がる。
+      if (vehicle.trip) vehicle.trip.stopAt -= first;
     }
   }
 

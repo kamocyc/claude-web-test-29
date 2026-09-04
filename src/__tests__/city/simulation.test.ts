@@ -130,4 +130,50 @@ describe('the city on the alignment engine', () => {
     const atTen = measure(30);
     expect(atTen).toBeCloseTo(atOne, 5);
   });
+
+  it('never puts two vehicles in the same place', () => {
+    // Two separate ways this broke, both silent: a wedged car allowed to
+    // ignore *crossing* traffic drove through it (car-following only ever
+    // looks along the vehicle's own route, so the other one is invisible),
+    // and a trip whose destination was not shifted when its route was trimmed
+    // never arrived -- so cars ran off the end of their route and piled up at
+    // the terminus, all at exactly the same point.
+    const world = new CityWorld(20260903, true);
+    seedStartingTown(world);
+    world.rebuild();
+    const sim = new CitySimulation(world, 20260903);
+    sim.speed = SPEEDS.indexOf(30);
+
+    let closest = Infinity;
+    for (let i = 0; i < 150 * 20; i++) {
+      sim.step(1 / 20);
+      if (i % 100 !== 0) continue;
+      const vehicles = world.traffic.vehicles;
+      for (let a = 0; a < vehicles.length; a++) {
+        for (let b = a + 1; b < vehicles.length; b++) {
+          const pa = vehicles[a].bodies[0];
+          const pb = vehicles[b].bodies[0];
+          if (pa && pb) closest = Math.min(closest, pa.pos.distanceTo(pb.pos));
+        }
+      }
+    }
+    // Two cars abreast in opposite lanes of one street are about three metres
+    // apart; anything under two is one driving through another.
+    expect(closest).toBeGreaterThan(2);
+  });
+
+  it('drops people at the door, not at the end of the street', () => {
+    const { sim } = runningCity(75);
+    const arrived = sim.citizens.filter((c) => c.lastTripMinutes > 0);
+    expect(arrived.length).toBeGreaterThan(0);
+    for (const citizen of arrived) {
+      // Whoever has finished a trip is standing in a building, not somewhere
+      // down the road from it.
+      const building = sim.buildings[
+        citizen.state === CitizenState.AtWork ? citizen.work : citizen.home
+      ];
+      if (!building?.alive) continue;
+      expect(citizen.at.distanceTo(building.at)).toBeLessThan(1);
+    }
+  });
 });

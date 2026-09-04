@@ -4,6 +4,7 @@ import type { Station, StationId } from '../track/network/station';
 import type { LinePlan } from '../track/sim/lineRoute';
 import type { Vehicle } from '../track/sim/traffic';
 import type { CityBuilding } from './buildings';
+import { simMinutes } from './clock';
 import { doorstep } from './buildings';
 import { findLaneRoute, laneStopsNear, nearestOn, type LaneRoute } from './routing';
 import type { CityWorld } from './world';
@@ -43,8 +44,10 @@ export const MAX_WAIT_MINUTES = 90;
 export const CAPACITY_PER_CAR = 90;
 /** Assumed average speed of a line, for choosing between transit and a car. */
 const LINE_SPEED = 14;
-/** Assumed wait, for the same choice. Half a headway, roughly. */
+/** Assumed wait [sim minutes], for the same choice. Half a headway, roughly. */
 const ASSUMED_WAIT_MINUTES = 6;
+/** Walking pace [m/s of world time], for the estimate only. */
+const WALK_PACE = 1.35;
 
 export const enum JourneyLeg {
   /** Walking from the door to the platform. */
@@ -104,8 +107,13 @@ export function planJourney(
     if (!board || !alight || board.station.id === alight.station.id) continue;
     if (board.distance > STATION_WALK_RADIUS || alight.distance > STATION_WALK_RADIUS) continue;
 
-    const ride = board.station.center.distanceTo(alight.station.center) / LINE_SPEED / 60;
-    const walk = (board.distance + alight.distance) / 1.35 / 60;
+    // Distances over speeds give seconds of world time; the wait is already
+    // in the city's minutes. Everything is converted before it is added, or
+    // the wait would weigh sixty times what it should.
+    const ride = simMinutes(
+      board.station.center.distanceTo(alight.station.center) / LINE_SPEED,
+    );
+    const walk = simMinutes((board.distance + alight.distance) / WALK_PACE);
     const minutes = walk + ride + ASSUMED_WAIT_MINUTES;
     if (best && minutes >= best.journey.minutes) continue;
 

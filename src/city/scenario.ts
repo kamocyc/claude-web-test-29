@@ -1,7 +1,8 @@
 import { Vector3 } from 'three';
 import { draw, smoothProfile, type Waypoint } from '../track/app/sketch';
 import { getClass } from '../track/network/classes';
-import { anchorFromNode } from '../track/network/editing';
+import { anchorFromNode, type Anchor } from '../track/network/editing';
+import type { NetworkClass } from '../track/network/classes';
 import type { NetNode } from '../track/network/network';
 import type { ZoneType } from '../track/network/zoning';
 import type { Heightfield } from '../track/terrain/heightfield';
@@ -24,9 +25,6 @@ import { Resource, WATER_LEVEL } from './terrain';
  * scarce thing.
  */
 
-/** Half the width and depth of the town's footprint [m]. */
-const TOWN_HALF_WIDTH = 620;
-const TOWN_HALF_DEPTH = 380;
 
 /** The main street runs this far either side of the centre. */
 const MAIN_STREET_HALF = 560;
@@ -66,22 +64,7 @@ export function findTownSite(field: Heightfield): Vector3 {
   let bestScore = Infinity;
   for (let z = -1400; z <= 1400; z += 160) {
     for (let x = -1400; x <= 1400; x += 160) {
-      let slope = 0;
-      let wet = 0;
-      let samples = 0;
-      for (let dz = -TOWN_HALF_DEPTH; dz <= TOWN_HALF_DEPTH; dz += 80) {
-        for (let dx = -TOWN_HALF_WIDTH; dx <= TOWN_HALF_WIDTH; dx += 80) {
-          const h = field.baseHeightAt(x + dx, z + dz);
-          // The slope to the next sample, which is what a street has to climb.
-          slope += Math.abs(h - field.baseHeightAt(x + dx + 40, z + dz + 40));
-          if (h < WATER_LEVEL) wet++;
-          samples++;
-        }
-      }
-      // Flat ground wins, and a town centre standing in the lake loses. A
-      // little water nearby is not penalised out of existence: a fishery needs
-      // a shore, and the valley is where the fertile ground is.
-      const score = slope / samples + (wet / samples) * 40;
+      const score = siteScore(field, x, z);
       if (score < bestScore) {
         bestScore = score;
         best = new Vector3(x, field.baseHeightAt(x, z), z);
@@ -89,6 +72,70 @@ export function findTownSite(field: Heightfield): Vector3 {
     }
   }
   return best;
+}
+
+/**
+ * How bad a site is, judged on the streets that would be laid there.
+ *
+ * Not the average slope of a rectangle. The engine refuses a road for the one
+ * grade it cannot climb, so what matters is the steepest thing the *layout*
+ * would have to do -- and the layout is known: a main street along z, cross
+ * streets along x, and back streets joining their ends. Scoring the rectangle
+ * instead picked sites that were flat on average with one bank across the
+ * middle, and the town filed 32% gradient warnings against itself on the
+ * first screen the player ever sees.
+ */
+function siteScore(field: Heightfield, x: number, z: number): number {
+  let steepest = 0;
+  let wet = 0;
+  let samples = 0;
+
+  const along = (
+    from: { x: number; z: number },
+    to: { x: number; z: number },
+    step: number,
+  ): void => {
+    const span = Math.hypot(to.x - from.x, to.z - from.z);
+    const steps = Math.max(1, Math.round(span / step));
+    let previous = field.baseHeightAt(from.x, from.z);
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const px = from.x + (to.x - from.x) * t;
+      const pz = from.z + (to.z - from.z) * t;
+      const h = field.baseHeightAt(px, pz);
+      steepest = Math.max(steepest, Math.abs(h - previous) / (span / steps));
+      previous = h;
+      if (h < WATER_LEVEL) wet++;
+      samples++;
+    }
+  };
+
+  // The main street, and the two back streets that run parallel to it.
+  for (const dz of [0, CROSS_REACH, -CROSS_REACH]) {
+    along(
+      { x: x - MAIN_STREET_HALF, z: z + dz },
+      { x: x + MAIN_STREET_HALF, z: z + dz },
+      BLOCK / 2,
+    );
+  }
+  // The cross streets between them.
+  for (let d = -MAIN_STREET_HALF + BLOCK; d < MAIN_STREET_HALF; d += BLOCK) {
+    along({ x: x + d, z: z - CROSS_REACH }, { x: x + d, z: z + CROSS_REACH }, 60);
+  }
+  // The station approach roads, which climb out of the town to the railway --
+  // the longest uninterrupted run in the layout, and the one most likely to
+  // find a bank.
+  for (const side of [-1, 1] as const) {
+    const at = x + side * STATION_OFFSET;
+    along({ x: at, z: z + CROSS_REACH }, { x: at, z: z + RAIL_OFFSET }, 70);
+  }
+  // The railway itself, which is laid to a far tighter gradient than a street.
+  along({ x: x - RAIL_HALF, z: z + RAIL_OFFSET }, { x: x + RAIL_HALF, z: z + RAIL_OFFSET }, 80);
+
+  // A town centre standing in the lake loses. A little water nearby is not
+  // penalised out of existence: a fishery needs a shore, and the valley is
+  // where the fertile ground is.
+  return steepest * 100 + (wet / Math.max(1, samples)) * 40;
 }
 
 /** Build the opening town into an empty world. Returns where it was put. */
@@ -101,8 +148,17 @@ export function seedStartingTown(world: CityWorld, options: ScenarioOptions = {}
   // The main street. Its profile is smoothed to a gentler grade than the
   // ground so that the engine has something to cut, fill and bridge -- a road
   // that simply follows every hollow is a road nobody had to think about.
+  //
+  // Its waypoints land on every half block, which is what puts a node exactly
+  // where each cross street starts: `draw` joins to an existing node within
+  // three metres, and nothing else would join these two roads (a cross street
+  // *begins* on the main street, so the automatic-crossing pass never sees an
+  // intersection to resolve). Derived from BLOCK rather than written as a
+  // number, because with the two out of step the side streets are laid
+  // alongside the main street without touching it, and no car can leave the
+  // block.
   const main: Waypoint[] = [];
-  for (let d = -MAIN_STREET_HALF; d <= MAIN_STREET_HALF; d += 70) {
+  for (let d = -MAIN_STREET_HALF; d <= MAIN_STREET_HALF; d += BLOCK / 2) {
     main.push({ x: site.x + d, z: site.z });
   }
   draw(net, field, 'road_medium', smoothProfile(field, main, 'road_medium', { grade: 0.05 }), {
@@ -115,8 +171,11 @@ export function seedStartingTown(world: CityWorld, options: ScenarioOptions = {}
   for (let d = -MAIN_STREET_HALF + BLOCK; d < MAIN_STREET_HALF; d += BLOCK) {
     for (const side of [1, -1] as const) {
       const points: Waypoint[] = [];
-      for (let out = 0; out <= CROSS_REACH; out += 60) {
-        points.push({ x: site.x + d, z: site.z + side * out });
+      // Stepped so the last point lands exactly on CROSS_REACH; with a fixed
+      // 60 m step the arms stopped at 120 m and the constant said 170.
+      const steps = Math.max(1, Math.round(CROSS_REACH / 60));
+      for (let i = 0; i <= steps; i++) {
+        points.push({ x: site.x + d, z: site.z + side * (CROSS_REACH * i) / steps });
       }
       draw(net, field, 'road_small', smoothProfile(field, points, 'road_small', { grade: 0.07 }), {
         straight: true,
@@ -147,6 +206,18 @@ export function seedStartingTown(world: CityWorld, options: ScenarioOptions = {}
   // headroom under it and files a clearance warning for every block.
   for (const side of [1, -1] as const) {
     const ends = side === 1 ? crossEnds.north : crossEnds.south;
+    if (ends.length < 2) continue;
+    // Past the outermost cross streets before joining them up. Stopping
+    // exactly at the last one leaves a right-angled *corner* there, and the
+    // engine cannot shape a junction face that turns through ninety degrees
+    // on two approaches -- it says so, and it is right. Carrying on for half
+    // a block makes every tip a T instead, which is also what a back street
+    // looks like in a town that expects to grow past its own edge.
+    for (const [tip, sign] of [[ends[0], -1], [ends[ends.length - 1], 1]] as const) {
+      const beyond = new Vector3(tip.x + sign * (BLOCK / 2), 0, tip.z);
+      beyond.y = field.baseHeightAt(beyond.x, beyond.z);
+      joinAlong(world, tip, beyond);
+    }
     for (let i = 1; i < ends.length; i++) joinAlong(world, ends[i - 1], ends[i]);
   }
 
@@ -190,9 +261,25 @@ function joinAlong(world: CityWorld, from: Vector3, to: Vector3, spacing = 80): 
   }
   draw(net, field, 'road_small', points, {
     straight: true,
-    start: startNode ? anchorFromNode(net, startNode, cls) : undefined,
-    end: endNode ? anchorFromNode(net, endNode, cls) : undefined,
+    start: startNode ? branchAt(net, startNode, cls) : undefined,
+    end: endNode ? branchAt(net, endNode, cls) : undefined,
   });
+}
+
+/**
+ * An anchor that joins a node without continuing the road already there.
+ *
+ * `anchorFromNode` is for carrying a road on: at a node with a single branch
+ * it hands back that branch's tangent, so the new road leaves along the old
+ * one and has to bend round to get where it is going. That is right at the end
+ * of a road and wrong at the end of a *street*, where the next one turns off
+ * at a right angle -- and the engine says so, reporting a crossing too sharp
+ * to shape. The level is still inherited, because a step at the junction would
+ * be a real fault; only the direction is left free.
+ */
+function branchAt(net: CityWorld['net'], node: NetNode, cls: NetworkClass): Anchor {
+  const inherited = anchorFromNode(net, node, cls);
+  return { pos: inherited.pos, node: node.id, grade: inherited.grade };
 }
 
 /**
@@ -305,7 +392,19 @@ function seedRailway(world: CityWorld, site: Vector3, northEnds: Vector3[]): voi
       field.baseHeightAt(station.center.x, railZ - FORECOURT_SETBACK),
       railZ - FORECOURT_SETBACK,
     );
-    joinAlong(world, nearest, forecourt, 70);
+    // Out of the junction squarely first, and only then across to the
+    // station. Running straight from the cross street's end to the forecourt
+    // arrives at the junction on a slant, and the back street is already
+    // there: the engine reads the three of them as a crossing too sharp to
+    // shape, and rightly says so.
+    const corner = new Vector3(
+      nearest.x,
+      0,
+      nearest.z + (forecourt.z - nearest.z) * 0.45,
+    );
+    corner.y = field.baseHeightAt(corner.x, corner.z);
+    joinAlong(world, nearest, corner, 70);
+    joinAlong(world, corner, forecourt, 70);
   }
 
   // A railway with no service on it is scenery. The town opens with the one
@@ -353,14 +452,26 @@ function paintOpeningZones(world: CityWorld, site: Vector3): void {
 
   // Primary industry, where the ground actually supports it and a street
   // already runs past -- an outpost the city cannot reach is worse than none.
+  //
+  // Only on ground nothing else claimed, and with a smaller brush. This pass
+  // runs last over the same cells as the first one, so painting over what is
+  // there turned the town's whole frontage into whatever happened to be under
+  // it: on the shipped seed, more forestry than shops and houses combined.
+  // It is meant to be an accent on the town, not a replacement for it.
   for (let d = -MAIN_STREET_HALF; d <= MAIN_STREET_HALF; d += 24) {
     for (const side of [1, -1] as const) {
       const x = site.x + d;
       const z = site.z + side * 16;
+      if (world.zones.at(x, z) !== null) continue;
       const resource = terrain.resourceAt(x, z);
-      if (resource === Resource.Fertile && terrain.nearWater(x, z, 120)) paint(x, z, 'farm');
-      else if (resource === Resource.Forest) paint(x, z, 'forestry');
-      else if (resource === Resource.Ore) paint(x, z, 'mining');
+      const use: ZoneType | null = resource === Resource.Fertile && terrain.nearWater(x, z, 120)
+        ? 'farm'
+        : resource === Resource.Forest
+          ? 'forestry'
+          : resource === Resource.Ore
+            ? 'mining'
+            : null;
+      if (use) world.zones.paint(x, z, 10, use);
     }
   }
 }

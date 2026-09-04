@@ -28,6 +28,15 @@ export interface LaneRoute {
    * rest of the road's households queue for a kerb that is never free.
    */
   startS: number;
+  /**
+   * How far along the last lane the trip ends [m].
+   *
+   * The door, not the end of the street. Without it a car counts as arrived
+   * only once it reaches the end of its final lane -- fifty to seventy metres
+   * past the building in this town -- which inflates every trip and parks the
+   * traveller a block from where they were going.
+   */
+  endS: number;
   /** Seconds the route is expected to take at free flow. */
   seconds: number;
   /** Metres. */
@@ -81,6 +90,7 @@ export function findLaneRoute(graph: LaneGraph, request: RouteRequest): LaneRout
       return {
         lanes: [start.lane],
         startS: start.s,
+        endS: targets.get(start.lane) ?? 0,
         seconds: span / Math.max(1, lane.speedLimit),
         length: span,
       };
@@ -151,16 +161,33 @@ function rebuild(
     length += span;
     seconds += span / Math.max(1, lane.speedLimit);
   });
-  return { lanes, startS, seconds, length };
+  return { lanes, startS, endS, seconds, length };
 }
 
-/** Every lane that runs along a given segment, either way. */
+/**
+ * Every lane that runs along a given segment, either way.
+ *
+ * Indexed, not scanned. Every trip that starts or ends at a building asks this
+ * question twice, and the whole city asks it inside a forty-minute departure
+ * window: a scan of every lane per question is O(trips x lanes) exactly when
+ * the city is busiest. The index is keyed on the graph object itself, so a
+ * rebuilt graph gets a fresh one without anybody having to remember to say so.
+ */
+const laneIndex = new WeakMap<LaneGraph, Map<SegmentId, number[]>>();
+
 export function lanesOnSegment(graph: LaneGraph, segment: SegmentId): number[] {
-  const out: number[] = [];
-  for (const lane of graph.lanes) {
-    if (lane.segment === segment && lane.kind === 'segment') out.push(lane.id);
+  let index = laneIndex.get(graph);
+  if (!index) {
+    index = new Map<SegmentId, number[]>();
+    for (const lane of graph.lanes) {
+      if (lane.kind !== 'segment' || lane.segment === undefined) continue;
+      const list = index.get(lane.segment);
+      if (list) list.push(lane.id);
+      else index.set(lane.segment, [lane.id]);
+    }
+    laneIndex.set(graph, index);
   }
-  return out;
+  return index.get(segment) ?? [];
 }
 
 /**

@@ -804,6 +804,11 @@ export class WorldBuilder {
       zones: this.zones,
     });
     this.zoneCells = zoning.cells;
+    // 敷地は毎回作り直され、番号も振り直される。前の番号で「建った敷地」を
+    // 選ぶと、まったく別の敷地に建物を描くことになる (道路を 1 本足しただけで
+    // 8 件中 7 件が別の敷地を指した)。空にしておき、街が建て直しを伝えて
+    // くるのを待つ -- 同じフレームのうちに来る (移植先で足した)。
+    if (this.builtLots !== null) this.builtLots = new Set<number>();
     this.lots = zoning.lots;
     const groundAt = (x: number, z: number): number => this.field.heightAt(x, z);
     buildZoneGrid(zoneGrid, this.zoneCells, groundAt);

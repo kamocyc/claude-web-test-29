@@ -102,4 +102,26 @@ describe('the opening town', () => {
       expect(Math.abs(grade)).toBeLessThanOrEqual(cls.maxGrade + 1e-6);
     }
   });
+
+  it('lays a clean town on any ground, not just the one it was tuned on', () => {
+    // The site search is the thing under test. It used to score a rectangle by
+    // its average slope, which happily picked ground that was flat on average
+    // with one bank across the middle -- and the town then filed 32% gradient
+    // warnings against itself on the first screen the player sees. It now
+    // scores the streets it is actually going to lay, including the climb out
+    // to the railway, so this holds on seeds nobody tuned for.
+    for (const seed of [1, 7, 42, 99, 555, 1234, 20260812, 20260903, 424242, 777777]) {
+      const world = new CityWorld(seed, true);
+      seedStartingTown(world);
+      const result = world.rebuild();
+      expect(
+        result.warnings.map((w) => w.message),
+        `seed ${seed}`,
+      ).toEqual([]);
+      // ...and every street reaches every other one. The cross streets meet
+      // the main street only because a node is already there, so a layout
+      // whose spacings drift apart lays them side by side without touching.
+      expect(result.stats.roadNetworks, `seed ${seed}`).toBe(1);
+    }
+  });
 });

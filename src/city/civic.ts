@@ -1,6 +1,7 @@
 import { Vector3 } from 'three';
 import { BuildingType } from '../core/types';
 import { isLeisure, leisureDraw, specFor } from '../world/buildings';
+import type { SegmentId } from '../track/network/network';
 import type { CityBuilding } from './buildings';
 import { roadLanesNear } from './transit';
 import type { CityWorld } from './world';
@@ -116,6 +117,33 @@ export function coveredLots(
 }
 
 /**
+ * The road a civic building is entered from.
+ *
+ * Every other building gets this from the plot it stands on. These do not
+ * stand on plots, so it is worked out from the network directly -- and it has
+ * to be, because a workplace with no way in is a workplace whose staff can
+ * never get to it. (They were hired, stranded on every departure for ever, and
+ * still counted as employed and taxed.)
+ *
+ * Re-derived after every rebuild rather than remembered, so a hospital whose
+ * street was re-laid is entered from the new one.
+ */
+export function accessFor(
+  world: CityWorld,
+  at: Vector3,
+): { segment: SegmentId; at: Vector3 } | null {
+  const graph = world.laneGraph;
+  let best: { segment: SegmentId; distance: number } | null = null;
+  for (const stop of roadLanesNear(world, at, ROAD_REACH)) {
+    const lane = graph.lanes[stop.lane];
+    if (!lane || lane.segment === undefined) continue;
+    const distance = lane.path.poseAt(stop.s).pos.distanceTo(at);
+    if (!best || distance < best.distance) best = { segment: lane.segment, distance };
+  }
+  return best ? { segment: best.segment, at: at.clone() } : null;
+}
+
+/**
  * The nearest civic building of a kind, and how far away it is.
  *
  * Distance as the crow flies rather than along the roads, and on purpose: a
@@ -139,6 +167,76 @@ export function nearest(
 }
 
 /**
+ * The civic buildings, grouped by kind.
+ *
+ * Worth building once and passing around: there are a handful of these among
+ * thousands of houses, and asking "where is the nearest hospital" by walking
+ * the whole building list is how an hourly pass over every citizen turns into
+ * a stall. Built from the same list, so it cannot disagree with it.
+ */
+export class CivicIndex {
+  private readonly byType = new Map<BuildingType, CityBuilding[]>();
+
+  constructor(buildings: readonly CityBuilding[]) {
+    for (const building of buildings) {
+      if (!building.alive || !civicKind(building.type)) continue;
+      const list = this.byType.get(building.type);
+      if (list) list.push(building);
+      else this.byType.set(building.type, [building]);
+    }
+  }
+
+  get isEmpty(): boolean {
+    return this.byType.size === 0;
+  }
+
+  of(type: BuildingType): readonly CityBuilding[] {
+    return this.byType.get(type) ?? [];
+  }
+
+  /** How well a place is served by one kind, from 0 to 1. */
+  coverage(type: BuildingType, at: Vector3): number {
+    const kind = civicKind(type);
+    if (!kind) return 0;
+    let closest = Infinity;
+    for (const building of this.of(type)) {
+      closest = Math.min(closest, building.at.distanceTo(at));
+    }
+    return falloff(kind, closest);
+  }
+
+  /** What the civic buildings are doing for somebody standing here. */
+  servicesAt(at: Vector3): ServiceReport {
+    let leisure = 0;
+    for (const kind of CIVIC_KINDS) {
+      if (!isLeisure(kind.type)) continue;
+      // The best venue in reach, not the sum of them: a second park round the
+      // corner is worth much less than the first, and a fairground across
+      // town is worth more than either.
+      const reached = this.coverage(kind.type, at) * Math.min(1, leisureDraw(kind.type) / 2);
+      leisure = Math.max(leisure, reached);
+    }
+    return {
+      health: this.coverage(BuildingType.Hospital, at),
+      safety: Math.max(
+        this.coverage(BuildingType.PoliceStation, at),
+        this.coverage(BuildingType.FireStation, at) * 0.8,
+      ),
+      education: this.coverage(BuildingType.School, at),
+      leisure,
+    };
+  }
+}
+
+/** Full marks inside half the reach, nothing beyond it, a straight fall between. */
+function falloff(kind: CivicKind, distance: number): number {
+  const inner = kind.reach / 2;
+  if (distance <= inner) return 1;
+  if (distance >= kind.reach) return 0;
+  return 1 - (distance - inner) / (kind.reach - inner);
+}
+
+/**
  * How well a place is served, from 0 to 1.
  *
  * Full marks inside half the reach, nothing beyond it, and a straight fall in
@@ -153,11 +251,7 @@ export function coverage(
   const kind = civicKind(type);
   if (!kind) return 0;
   const found = nearest(buildings, type, at);
-  if (!found) return 0;
-  const inner = kind.reach / 2;
-  if (found.distance <= inner) return 1;
-  if (found.distance >= kind.reach) return 0;
-  return 1 - (found.distance - inner) / (kind.reach - inner);
+  return found ? falloff(kind, found.distance) : 0;
 }
 
 /** What the civic buildings are doing for somebody standing here. */
@@ -170,24 +264,7 @@ export interface ServiceReport {
 }
 
 export function servicesAt(buildings: readonly CityBuilding[], at: Vector3): ServiceReport {
-  let leisure = 0;
-  for (const kind of CIVIC_KINDS) {
-    if (!isLeisure(kind.type)) continue;
-    // The best venue in reach, not the sum of them: a second park round the
-    // corner is worth much less than the first, and a fairground across town
-    // is worth more than either.
-    const reached = coverage(buildings, kind.type, at) * Math.min(1, leisureDraw(kind.type) / 2);
-    leisure = Math.max(leisure, reached);
-  }
-  return {
-    health: coverage(buildings, BuildingType.Hospital, at),
-    safety: Math.max(
-      coverage(buildings, BuildingType.PoliceStation, at),
-      coverage(buildings, BuildingType.FireStation, at) * 0.8,
-    ),
-    education: coverage(buildings, BuildingType.School, at),
-    leisure,
-  };
+  return new CivicIndex(buildings).servicesAt(at);
 }
 
 /** What the whole set is costing the city a day. */
