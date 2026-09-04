@@ -129,6 +129,13 @@ const ARRIVAL_REACH = 4;
  */
 const STUCK_LIMIT = 25;
 
+/**
+ * これだけ動けないままだった車は、交差点の取り合いを見送って進む [s] (移植先で足した)。
+ *
+ * 普通の渋滞待ちより長く、街が止まったままになるより短い。
+ */
+const GRIDLOCK_RELIEF = 40;
+
 /** 路線 1 本に走らせる編成の数。この距離 [m] に 1 本。 */
 const LINE_TRAIN_SPACING = 2500;
 /** 路線 1 本の編成数の上限。 */
@@ -180,6 +187,7 @@ export class Traffic {
   private rng: () => number;
   private readonly options: Required<TrafficOptions>;
 
+
   constructor(
     private graph: LaneGraph,
     options: TrafficOptions = {},
@@ -227,6 +235,19 @@ export class Traffic {
       this.vehicles.length,
       ...this.vehicles.filter((vehicle) => !vehicle.line || live.has(vehicle.line.id)),
     );
+  }
+
+  /**
+   * 車両を 1 台降ろす (移植先で足した)。
+   *
+   * 用事のある車を、着く前に取り下げるためのもの。市民が「もう歩く」と
+   * 決めたときに要る。着いた印は付けないので `onArrive` は呼ばれない。
+   */
+  remove(id: number): boolean {
+    const index = this.vehicles.findIndex((v) => v.id === id);
+    if (index < 0) return false;
+    this.vehicles.splice(index, 1);
+    return true;
   }
 
   /**
@@ -278,6 +299,18 @@ export class Traffic {
   }
 
   /** その種別で走らせたい台数。 */
+  /**
+   * 行き当たりばったりの車の量を変える (移植先で足した)。
+   *
+   * 移植元では街の車がこれしかないので、道路の長さに見合うだけ湧かせる。
+   * 都市ゲームでは車の大半が市民の用事なので、同じ量を湧かせると同じ道を
+   * 二重に数えることになる。ここは「よその車」だけを表す量に落とす。
+   */
+  setAmbient(options: { carSpacing?: number; maxCars?: number }): void {
+    if (options.carSpacing !== undefined) this.options.carSpacing = options.carSpacing;
+    if (options.maxCars !== undefined) this.options.maxCars = options.maxCars;
+  }
+
   targetCount(kind: VehicleKind): number {
     let length = 0;
     for (const id of this.spawnPoints()) {
@@ -434,7 +467,15 @@ export class Traffic {
           lane.phase === undefined ? 0 : signalStateAt(this.time, lane.phase);
 
         // 進路の取り合い。合流先に空きが無い / 交わる進路に誰かいる。
-        const busy = free < room || lane.conflicts.some((c) => occupied.has(c));
+        //
+        // 長く詰まりきった車には、この取り合いを見送らせる (移植先で足した)。
+        // 交差点の中で止まった車は、その進路を押さえたまま動けない。それが
+        // 一巡すると誰も譲れなくなり、街ぜんぶの車が永久に止まる -- 開始時の
+        // 町でも 5 分で起きた。前車追従はそのまま効いているので、譲らせても
+        // 重なることはなく、詰まりが一台ずつ解けていく。列車が詰まったときに
+        // 降ろすのと同じ趣旨の逃げ道。
+        const wedged = (vehicle.stuckFor ?? 0) > GRIDLOCK_RELIEF;
+        const busy = !wedged && (free < room || lane.conflicts.some((c) => occupied.has(c)));
 
         if (vehicle.commit === lane.id) {
           // 決めたあとでも、まだ止まれるうちに赤や取り合いに気付いたら

@@ -282,12 +282,19 @@ function drawLines(): void {
     );
     return;
   }
+  const report = app.sim.lineReport();
   for (const plan of plans) {
     const line = app.world.lines.get(plan.id);
+    const load = report.get(plan.id);
     body.appendChild(row(
       line?.name ?? `路線 ${plan.id}`,
-      plan.runnable ? `${plan.runs.length} 区間` : '⚠ 線路が繋がっていません',
+      plan.runnable
+        ? `列車 ${load?.trains ?? 0}　乗車 ${load?.riders ?? 0}　待ち ${load?.waiting ?? 0}`
+        : '⚠ 線路が繋がっていません',
       !plan.runnable,
+    ));
+    body.appendChild(note(
+      `${plan.stops.map((s) => s.name).join(' — ')}　${(plan.length / 1000).toFixed(2)} km`,
     ));
   }
 }

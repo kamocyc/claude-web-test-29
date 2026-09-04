@@ -197,6 +197,7 @@ export class Hud {
         ['雇用', `${city.employed}/${city.jobs}`],
         ['幸福度', `${Math.round(city.happiness)}`],
         ['移動中', `${city.travelling}${city.stranded > 0 ? ` ⚠${city.stranded}` : ''}`],
+        ['公共交通', `${city.onTransit}`],
         ['平均通勤', city.meanCommute > 0 ? `${Math.round(city.meanCommute)} 分` : '—'],
         ['道路・線路', `${(stats.totalLength / 1000).toFixed(2)} km`],
         // The city's own count, not the engine's: the engine counts plots a

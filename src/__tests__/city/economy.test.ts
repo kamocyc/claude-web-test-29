@@ -69,9 +69,14 @@ describe('the city on the alignment engine', () => {
     expect(sim.treasury.spent).toBe(0);
     expect(opening).toBeGreaterThan(0);
 
-    // Long enough to run the clock past a midnight, so the books close once.
-    sim.speed = SPEEDS.indexOf(10);
-    for (let i = 0; i < 160 * 20; i++) sim.step(1 / 20);
+    // Grow a city worth taxing, then wind the clock up to just before
+    // midnight rather than simulating the eight thousand seconds of world time
+    // a whole day now takes. What is under test is the books closing, not the
+    // hours before it.
+    sim.speed = SPEEDS.indexOf(30);
+    for (let i = 0; i < 45 * 20; i++) sim.step(1 / 20);
+    sim.minutes = 1430;
+    for (let i = 0; i < 15 * 20; i++) sim.step(1 / 20);
     expect(sim.day).toBeGreaterThan(0);
 
     // The day closed on a real ledger rather than on zeroes.

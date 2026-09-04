@@ -2,6 +2,7 @@ import { Vector3 } from 'three';
 import { hashToUnit, Rng } from '../core/rng';
 import type { Vehicle } from '../track/sim/traffic';
 import type { LaneRoute } from './routing';
+import type { Journey } from './transit';
 
 /**
  * The people.
@@ -51,6 +52,13 @@ export interface CityCitizen {
    * joins it when there is room.
    */
   route: LaneRoute | null;
+  /**
+   * The transit journey this trip is being made as, or null for a drive or a
+   * walk. The walking legs of a journey still use `walk`, and the ride still
+   * uses `vehicle` -- a rider is in a vehicle in exactly the sense a driver
+   * is, they simply are not the one steering.
+   */
+  journey: Journey | null;
 
   /** Sim minute the current trip started, for the commute they report. */
   tripStartMinute: number;
@@ -83,6 +91,7 @@ export function createCitizen(
   home: number,
   at: Vector3,
   rng: Rng,
+  carOwnership = CAR_OWNERSHIP,
 ): CityCitizen {
   return {
     id,
@@ -92,11 +101,12 @@ export function createCitizen(
     home,
     work: -1,
     state: CitizenState.AtHome,
-    hasCar: rng.next() < CAR_OWNERSHIP,
+    hasCar: rng.next() < carOwnership,
     at: at.clone(),
     vehicle: -1,
     walk: null,
     route: null,
+    journey: null,
     tripStartMinute: 0,
     lastTripMinutes: 0,
     retryAtMinute: 0,

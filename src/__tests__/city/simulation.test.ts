@@ -18,8 +18,8 @@ function runningCity(seconds: number, seed = 20260903) {
   seedStartingTown(world);
   world.rebuild();
   const sim = new CitySimulation(world, seed);
-  // x10, which is what a player watching a city grow would use.
-  sim.speed = SPEEDS.indexOf(10);
+  // x30, which is what a player watching a city grow would use.
+  sim.speed = SPEEDS.indexOf(30);
   // 20 frames a second of wall clock, which is what the browser gives it.
   const frames = Math.round(seconds * 20);
   for (let i = 0; i < frames; i++) sim.step(1 / 20);
@@ -28,7 +28,7 @@ function runningCity(seconds: number, seed = 20260903) {
 
 describe('the city on the alignment engine', () => {
   it('grows buildings on the plots the roads produced', () => {
-    const { world, sim } = runningCity(30);
+    const { world, sim } = runningCity(60);
 
     // Growth is demand-driven and paced (a few buildings a sim hour), so this
     // is "the town filled in", not "every plot was covered instantly".
@@ -62,7 +62,7 @@ describe('the city on the alignment engine', () => {
   });
 
   it('sends people to work along the lane graph, in real vehicles', () => {
-    const { world, sim } = runningCity(180);
+    const { world, sim } = runningCity(60);
 
     // Somebody has finished a commute, and it took a plausible time.
     const arrived = sim.citizens.filter((c) => c.lastTripMinutes > 0);
@@ -82,7 +82,7 @@ describe('the city on the alignment engine', () => {
   });
 
   it('leaves nobody stuck when the network changes under them', () => {
-    const { world, sim } = runningCity(120);
+    const { world, sim } = runningCity(60);
     const before = sim.citizens.length;
     expect(before).toBeGreaterThan(0);
 
@@ -119,11 +119,15 @@ describe('the city on the alignment engine', () => {
       const sim = new CitySimulation(world, 1);
       sim.speed = SPEEDS.indexOf(speed);
       const seconds = 6;
+      const from = sim.minutes;
       for (let i = 0; i < seconds * 20; i++) sim.step(1 / 20);
-      return sim.minutes / world.traffic.time;
+      // The *change* in the clock against the traffic's own time. The clock
+      // does not start at zero (a city opens in the morning), so the ratio has
+      // to be measured from where it started or the offset swamps it.
+      return (sim.minutes - from) / world.traffic.time;
     };
     const atOne = measure(1);
-    const atTen = measure(10);
+    const atTen = measure(30);
     expect(atTen).toBeCloseTo(atOne, 5);
   });
 });

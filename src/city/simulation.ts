@@ -13,6 +13,7 @@ import {
   type CityBuilding,
 } from './buildings';
 import {
+  CAR_OWNERSHIP,
   createCitizen,
   CitizenState,
   departForHomeMinute,
@@ -23,6 +24,14 @@ import {
 } from './citizens';
 import { Treasury } from './economy';
 import { findLaneRoute, laneStopsNear, type LaneRoute } from './routing';
+import type { LineId } from '../track/network/line';
+import {
+  capacityOf,
+  isBoardable,
+  JourneyLeg,
+  MAX_WAIT_MINUTES,
+  planJourney,
+} from './transit';
 import type { CityWorld } from './world';
 
 /**
@@ -45,12 +54,26 @@ import type { CityWorld } from './world';
  * -- which is what stops a city that is fine at x1 from failing at x10.
  */
 
-/** Sim minutes per real second at x1. A day is 24 real minutes. */
-export const SIM_MINUTES_PER_SECOND = 1;
+/**
+ * Sim minutes per second of world time at x1.
+ *
+ * This is the exchange rate between the clock and the physics, and it is the
+ * one number that decides whether a commute reads as a commute. The vehicles
+ * move at real speeds -- a small road is 12 m/s -- so at one minute per second
+ * a kilometre of driving took eighty minutes of the day and a five hundred
+ * metre walk took six hours, which is not a city, it is a diorama with a
+ * broken clock. At a sixth of that, a drive across the town is a quarter of an
+ * hour and the walk is an hour: still generous to the car, but the shape of a
+ * real journey, and the shape is what the player is deciding about.
+ *
+ * A day is 8640 seconds of world time, which is two and a half hours at x1 and
+ * under five minutes at x30 -- hence the two fast settings.
+ */
+export const SIM_MINUTES_PER_SECOND = 1 / 6;
 
 /** Pause, slow, normal, fast, very fast. */
-export const SPEEDS = [0, 0.5, 1, 3, 10] as const;
-export const DEFAULT_SPEED = 2;
+export const SPEEDS = [0, 1, 3, 10, 30] as const;
+export const DEFAULT_SPEED = 3;
 
 /** The traffic model integrates at no more than this [s]. */
 const TRAFFIC_MAX_STEP = 0.1;
@@ -72,14 +95,20 @@ const BUILDINGS_PER_STEP = 4;
 const JOB_SURPLUS = 0.15;
 
 /** People arrive at this rate per sim hour when the city is worth moving to. */
-const MOVE_IN_PER_HOUR = 24;
+const MOVE_IN_PER_HOUR = 6;
 
 /** Sustained misery before somebody leaves [sim hours]. */
 const PATIENCE_HOURS = 36;
 const UNHAPPY_THRESHOLD = 30;
 
 /** A commute this long [sim minutes] scores nothing. */
-const COMMUTE_MISERY = 180;
+const COMMUTE_MISERY = 75;
+
+/** The time of day a new city opens at [sim minutes]. */
+export const OPENING_MINUTE = 6 * 60;
+
+/** A trip still going after this long [sim minutes] is given up on. */
+const ABANDON_AFTER = 240;
 
 export interface CityStats {
   population: number;
@@ -89,6 +118,8 @@ export interface CityStats {
   employed: number;
   homes: number;
   travelling: number;
+  /** Of those travelling, how many are on a train or waiting for one. */
+  onTransit: number;
   stranded: number;
   meanCommute: number;
   happiness: number;
@@ -100,13 +131,21 @@ export class CitySimulation {
   readonly treasury = new Treasury();
   readonly rng: Rng;
 
-  /** Sim minutes since the city was founded. */
-  minutes = 0;
+  /**
+   * Sim minutes since the city was founded.
+   *
+   * Starts at six in the morning rather than at midnight: a new city should
+   * open with people about to leave for work, not with four hours of empty
+   * streets before anything happens.
+   */
+  minutes = OPENING_MINUTE;
+  /** Commutes completed by train since the city was founded. */
+  transitTrips = 0;
   speed = DEFAULT_SPEED;
 
   stats: CityStats = {
     population: 0, buildings: 0, jobs: 0, employed: 0, homes: 0,
-    travelling: 0, stranded: 0, meanCommute: 0, happiness: 50,
+    travelling: 0, onTransit: 0, stranded: 0, meanCommute: 0, happiness: 50,
   };
 
   /** Plots with nothing on them, refreshed with the world. */
@@ -121,9 +160,22 @@ export class CitySimulation {
   private charged = false;
   /** Trips that failed to find a vehicle slot, retried next tick. */
   private pending: CityCitizen[] = [];
+  /** Riders aboard each vehicle, so a full train leaves somebody behind. */
+  private readonly riders = new Map<number, number>();
 
-  constructor(readonly world: CityWorld, seed = 20260903) {
+  /**
+   * How many households have a car.
+   *
+   * A knob rather than a constant because it is the one number that decides
+   * whether a line is worth building, and a test that wants to watch people
+   * ride should be able to say "this is a town without cars" instead of
+   * growing a city big enough to jam.
+   */
+  carOwnership = CAR_OWNERSHIP;
+
+  constructor(readonly world: CityWorld, seed = 20260903, options: { carOwnership?: number } = {}) {
     this.rng = new Rng(seed);
+    if (options.carOwnership !== undefined) this.carOwnership = options.carOwnership;
   }
 
   get day(): number {
@@ -162,6 +214,7 @@ export class CitySimulation {
       const slice = Math.min(TRAFFIC_MAX_STEP, remaining);
       this.world.traffic.step(slice);
       this.advanceWalkers(slice);
+      this.advanceRiders();
       remaining -= slice;
     }
 
@@ -184,7 +237,13 @@ export class CitySimulation {
    */
   private onWorldChanged(): void {
     const { free, lost } = reattachBuildings(this.world, this.buildings);
-    this.freeLots = free;
+    // Shuffled, and that is not a detail. `grow` takes plots off the front of
+    // this list, so in the order the engine derived them the town fills
+    // strictly in the order its roads were laid -- the whole city ends up in
+    // one corner, and the station at the other end of town never sees a
+    // passenger because nobody lives or works near it. Deterministic, from the
+    // city's own generator, so a seed still builds the same town.
+    this.freeLots = this.rng.shuffled(free);
     this.publishBuiltLots();
 
     // Whatever the player laid since the last rebuild is charged for now, out
@@ -202,9 +261,11 @@ export class CitySimulation {
       building.occupants = [];
     }
 
+    this.riders.clear();
     for (const citizen of this.citizens) {
       citizen.vehicle = -1;
       citizen.walk = null;
+      citizen.journey = null;
       if (citizen.state === CitizenState.ToWork || citizen.state === CitizenState.ToHome) {
         // Put them back where they were going from, and let the schedule send
         // them again. Half a trip through a graph that no longer exists is
@@ -245,9 +306,32 @@ export class CitySimulation {
       }
     }
 
+    this.abandonHopelessTrips();
+
     // Trips that could not be started (no room on the road yet) try again.
     const waiting = this.pending.splice(0, this.pending.length);
     for (const citizen of waiting) this.startVehicle(citizen);
+  }
+
+  /**
+   * Nobody sits in a jam for ever.
+   *
+   * A trip that has run this long is not going to finish: the network cannot
+   * carry what the city is asking of it. Rather than leave the citizen on the
+   * road for the rest of the week -- and their car in the queue making it
+   * worse -- they give up and go home, and the city counts them as stranded.
+   * That is the reading the player needs: the stranded figure is the number of
+   * people whose journey the roads could not deliver.
+   */
+  private abandonHopelessTrips(): void {
+    for (const citizen of this.citizens) {
+      if (citizen.state !== CitizenState.ToWork && citizen.state !== CitizenState.ToHome) continue;
+      if (this.minutes - citizen.tripStartMinute < ABANDON_AFTER) continue;
+      if (citizen.vehicle >= 0 && !citizen.journey) {
+        this.world.traffic.remove(citizen.vehicle);
+      }
+      this.strand(citizen);
+    }
   }
 
   /** Set off. The route is found now; the vehicle may have to wait for room. */
@@ -270,8 +354,36 @@ export class CitySimulation {
     citizen.state = state;
     citizen.tripStartMinute = this.minutes;
     citizen.route = route;
+    citizen.journey = null;
+
+    // Which way to go. Somebody without a car takes the train if there is one
+    // and walks the whole way if there is not; somebody with a car takes the
+    // train only when it is genuinely quicker than driving. That is the whole
+    // reason to build a line: it has to beat the road on its merits.
+    const drive = route.seconds / 60;
+    const journey = citizen.hasCar || this.transitOffered(citizen)
+      ? planJourney(this.world, from, to)
+      : null;
+    if (journey && (!citizen.hasCar || journey.journey.minutes < drive)) {
+      citizen.journey = journey.journey;
+      citizen.journey.waitingSince = this.minutes;
+      citizen.walk = { route: journey.access, travelled: 0 };
+      return;
+    }
+
     if (citizen.hasCar) this.startVehicle(citizen);
     else citizen.walk = { route, travelled: 0 };
+  }
+
+  /**
+   * Whether it is worth looking for a train for somebody on foot.
+   *
+   * Only that there are lines at all -- the search itself decides the rest.
+   * Kept separate so the common case (no lines yet) costs nothing.
+   */
+  private transitOffered(citizen: CityCitizen): boolean {
+    void citizen;
+    return (this.world.result?.lines.length ?? 0) > 0;
   }
 
   /** Put a car on the road for a citizen whose route is already found. */
@@ -291,9 +403,11 @@ export class CitySimulation {
     else this.pending.push(citizen);
   }
 
+  /** Where on its first lane a car joins: at the door it set off from. */
   private startOffset(route: LaneRoute): number {
     const lane = this.world.laneGraph.lanes[route.lanes[0]];
-    return lane ? Math.min(6, lane.path.length * 0.5) : 0;
+    if (!lane) return 0;
+    return Math.max(0, Math.min(route.startS, lane.path.length - 0.5));
   }
 
   private arrive(citizen: CityCitizen, vehicle: Vehicle): void {
@@ -311,9 +425,90 @@ export class CitySimulation {
       if (at) citizen.at.copy(at);
       if (walk.travelled >= walk.route.length) {
         citizen.walk = null;
-        this.finishTrip(citizen);
+        const journey = citizen.journey;
+        if (journey?.leg === JourneyLeg.ToStation) {
+          // On the platform. The trip is not over; it has barely started.
+          journey.leg = JourneyLeg.Waiting;
+          journey.waitingSince = this.minutes;
+          const station = this.world.net.stations.get(journey.board);
+          if (station) citizen.at.copy(station.center);
+        } else {
+          this.finishTrip(citizen);
+        }
       }
     }
+  }
+
+  /**
+   * The platform and the ride.
+   *
+   * Boarding is not a schedule lookup: a rider gets on the train that is
+   * standing at their station with its doors open, on their line, with room.
+   * Getting off is the same rule at the other end. Everything in between is
+   * the traffic model driving the train, and a rider who is on it goes exactly
+   * where it goes -- including nowhere, if it is stuck.
+   */
+  private advanceRiders(): void {
+    const vehicles = this.world.traffic.vehicles;
+    const byId = new Map<number, Vehicle>();
+    for (const vehicle of vehicles) byId.set(vehicle.id, vehicle);
+
+    for (const citizen of this.citizens) {
+      const journey = citizen.journey;
+      if (!journey) continue;
+
+      if (journey.leg === JourneyLeg.Waiting) {
+        const train = vehicles.find(
+          (v) => isBoardable(v, journey.line, journey.board)
+            && (this.riders.get(v.id) ?? 0) < capacityOf(v),
+        );
+        if (train) {
+          this.riders.set(train.id, (this.riders.get(train.id) ?? 0) + 1);
+          citizen.vehicle = train.id;
+          journey.leg = JourneyLeg.Riding;
+        } else if (this.minutes - journey.waitingSince > MAX_WAIT_MINUTES) {
+          // The train never came. Give up on it rather than wait for ever:
+          // walk the rest of the way if the route is still there, and be
+          // stranded (and unhappy about it) if it is not.
+          citizen.journey = null;
+          if (citizen.route) citizen.walk = { route: citizen.route, travelled: 0 };
+          else this.strand(citizen);
+        }
+        continue;
+      }
+
+      if (journey.leg !== JourneyLeg.Riding) continue;
+
+      const train = byId.get(citizen.vehicle);
+      if (!train) {
+        // The train was withdrawn under them. Put them on the pavement where
+        // they last were rather than deleting the trip.
+        this.alight(citizen);
+        if (journey.egress) citizen.walk = { route: journey.egress, travelled: 0 };
+        else this.strand(citizen);
+        citizen.journey = null;
+        continue;
+      }
+      if (train.bodies[0]) citizen.at.copy(train.bodies[0].pos);
+      if (isBoardable(train, journey.line, journey.alight)) {
+        this.alight(citizen);
+        const station = this.world.net.stations.get(journey.alight);
+        if (station) citizen.at.copy(station.center);
+        journey.leg = JourneyLeg.FromStation;
+        if (journey.egress) citizen.walk = { route: journey.egress, travelled: 0 };
+        else this.finishTrip(citizen);
+      }
+    }
+  }
+
+  /** Off the train, and out of its rider count. */
+  private alight(citizen: CityCitizen): void {
+    const aboard = this.riders.get(citizen.vehicle);
+    if (aboard !== undefined) {
+      if (aboard <= 1) this.riders.delete(citizen.vehicle);
+      else this.riders.set(citizen.vehicle, aboard - 1);
+    }
+    citizen.vehicle = -1;
   }
 
   /** Where a route reaches after `travelled` metres. */
@@ -331,6 +526,8 @@ export class CitySimulation {
   private finishTrip(citizen: CityCitizen): void {
     citizen.lastTripMinutes = Math.max(0, this.minutes - citizen.tripStartMinute);
     citizen.route = null;
+    if (citizen.journey) this.transitTrips++;
+    citizen.journey = null;
     citizen.state = citizen.state === CitizenState.ToWork
       ? CitizenState.AtWork
       : CitizenState.AtHome;
@@ -342,9 +539,11 @@ export class CitySimulation {
 
   private strand(citizen: CityCitizen): void {
     citizen.state = CitizenState.Stranded;
+    if (citizen.vehicle >= 0) this.alight(citizen);
     citizen.vehicle = -1;
     citizen.walk = null;
     citizen.route = null;
+    citizen.journey = null;
     citizen.retryAtMinute = this.minutes + STRANDED_RETRY;
     const home = this.buildings[citizen.home];
     if (home?.alive) citizen.at.copy(home.at);
@@ -353,6 +552,7 @@ export class CitySimulation {
   private sendHome(citizen: CityCitizen): void {
     citizen.state = CitizenState.AtHome;
     citizen.route = null;
+    citizen.journey = null;
     const home = this.buildings[citizen.home];
     if (home?.alive) citizen.at.copy(home.at);
   }
@@ -489,13 +689,30 @@ export class CitySimulation {
     for (const citizen of this.citizens) {
       const employed = citizen.work >= 0 && (this.buildings[citizen.work]?.alive ?? false);
       const housed = this.buildings[citizen.home]?.alive ?? false;
-      const commute = citizen.lastTripMinutes > 0
-        ? Math.max(0, 100 - (citizen.lastTripMinutes / COMMUTE_MISERY) * 100)
+      // The trip that counts is the worse of "the last one I finished" and
+      // "the one I am still on". Judging people only on finished trips means
+      // somebody who has been on the road since breakfast and has not arrived
+      // is scored as though their commute were fine -- which is exactly
+      // backwards, and it let a gridlocked city report itself content and go
+      // on attracting people into the jam.
+      const travelling = citizen.state === CitizenState.ToWork
+        || citizen.state === CitizenState.ToHome;
+      const worst = Math.max(
+        citizen.lastTripMinutes,
+        travelling ? this.minutes - citizen.tripStartMinute : 0,
+      );
+      // Allowed to go negative, and that is the point. Floored at zero, being
+      // housed and employed is worth 65 whatever the roads are like, so no
+      // amount of gridlock could ever make the city unattractive and the
+      // population only ever went up. A commute bad enough has to be able to
+      // outweigh having somewhere to live.
+      const commute = worst > 0
+        ? Math.max(-100, 100 - (worst / COMMUTE_MISERY) * 100)
         : 70;
       const score = clamp(
-        (housed ? 55 : 0)
-        + (employed ? 25 : 5)
-        + commute * 0.2
+        (housed ? 45 : 0)
+        + (employed ? 20 : 5)
+        + commute * 0.35
         - (citizen.state === CitizenState.Stranded ? 40 : 0),
       );
       citizen.happiness = citizen.happiness < 0
@@ -535,6 +752,7 @@ export class CitySimulation {
           building.id,
           building.at,
           this.rng,
+          this.carOwnership,
         );
         this.citizens.push(citizen);
         building.occupants.push(id);
@@ -596,6 +814,7 @@ export class CitySimulation {
   private sample(): void {
     let employed = 0;
     let travelling = 0;
+    let onTransit = 0;
     let stranded = 0;
     let commuteTotal = 0;
     let commuteCount = 0;
@@ -604,6 +823,7 @@ export class CitySimulation {
       if (citizen.work >= 0) employed++;
       if (citizen.state === CitizenState.ToWork || citizen.state === CitizenState.ToHome) {
         travelling++;
+        if (citizen.journey) onTransit++;
       }
       if (citizen.state === CitizenState.Stranded) stranded++;
       if (citizen.lastTripMinutes > 0) {
@@ -620,6 +840,7 @@ export class CitySimulation {
       employed,
       homes: this.buildings.filter((b) => b.alive && isHome(b)).length,
       travelling,
+      onTransit,
       stranded,
       meanCommute: commuteCount === 0 ? 0 : commuteTotal / commuteCount,
       happiness: this.citizens.length === 0 ? 50 : happiness / people,
@@ -636,6 +857,37 @@ export class CitySimulation {
     let total = 0;
     for (const b of this.buildings) if (b.alive && isWorkplace(b)) total += b.capacity;
     return total;
+  }
+
+  /**
+   * What each line is carrying right now.
+   *
+   * The panel's whole job is to answer "is this line worth what it costs",
+   * and that question is about riders, not about track. Trains come from the
+   * traffic model, riders and the platform queue from the citizens -- nothing
+   * here is a tally kept on the side that could drift from what is happening.
+   */
+  lineReport(): Map<LineId, { trains: number; riders: number; waiting: number }> {
+    const out = new Map<LineId, { trains: number; riders: number; waiting: number }>();
+    const of = (id: LineId) => {
+      let entry = out.get(id);
+      if (!entry) {
+        entry = { trains: 0, riders: 0, waiting: 0 };
+        out.set(id, entry);
+      }
+      return entry;
+    };
+    for (const plan of this.world.result?.lines ?? []) of(plan.id);
+    for (const vehicle of this.world.traffic.vehicles) {
+      if (vehicle.line) of(vehicle.line.id).trains++;
+    }
+    for (const citizen of this.citizens) {
+      const journey = citizen.journey;
+      if (!journey) continue;
+      if (journey.leg === JourneyLeg.Riding) of(journey.line).riders++;
+      else if (journey.leg === JourneyLeg.Waiting) of(journey.line).waiting++;
+    }
+    return out;
   }
 
   /** Daily upkeep of everything the city keeps: its buildings and its network. */

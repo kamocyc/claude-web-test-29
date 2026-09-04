@@ -28,6 +28,9 @@ import { CityTerrain } from './terrain';
  * working any of it out again, which is what keeps the map, the panels and the
  * simulation unable to disagree.
  */
+/** How much of the engine's own wandering traffic the city keeps. */
+const AMBIENT_TRAFFIC = { carSpacing: 900, maxCars: 12 };
+
 export class CityWorld {
   readonly field = new Heightfield();
   readonly terrain = new CityTerrain(this.field);
@@ -59,6 +62,10 @@ export class CityWorld {
       headless ? new MeshBasicMaterial() : createTerrainMaterial(),
     );
     this.builder = new WorldBuilder(this.net, this.field, this.terrainMesh);
+    // Wandering cars are scenery here, not the traffic. The traffic is the
+    // citizens': every car with somewhere to go is somebody's. Left at the
+    // engine's own density the two would double-count the same road.
+    this.builder.traffic.setAmbient(AMBIENT_TRAFFIC);
   }
 
   /** What the player painted, kept across re-laying. */

@@ -30,6 +30,16 @@ export class Rng {
     return items[this.int(items.length)];
   }
 
+  /** A shuffled copy (Fisher-Yates), so the caller's array is left alone. */
+  shuffled<T>(items: readonly T[]): T[] {
+    const out = [...items];
+    for (let i = out.length - 1; i > 0; i--) {
+      const j = this.int(i + 1);
+      [out[i], out[j]] = [out[j], out[i]];
+    }
+    return out;
+  }
+
   getState(): number {
     return this.state;
   }

@@ -20,6 +20,14 @@ import type { LaneGraph, VehicleKind } from '../track/sim/lanegraph';
 export interface LaneRoute {
   /** The lanes to drive, in order. */
   lanes: number[];
+  /**
+   * How far along the first lane the trip starts [m].
+   *
+   * A car has to appear at the door it is leaving from, not at the top of the
+   * street: put every car on the same spot and only one of them fits, and the
+   * rest of the road's households queue for a kerb that is never free.
+   */
+  startS: number;
   /** Seconds the route is expected to take at free flow. */
   seconds: number;
   /** Metres. */
@@ -52,6 +60,9 @@ export function findLaneRoute(graph: LaneGraph, request: RouteRequest): LaneRout
   for (const target of to) targets.set(target.lane, target.s);
 
   const limit = request.limit ?? 6000;
+  /** Where on each starting lane the trip would begin. */
+  const startAt = new Map<number, number>();
+  for (const start of from) startAt.set(start.lane, start.s);
   const best = new Map<number, number>();
   const cameFrom = new Map<number, number>();
   /** Lane -> seconds from the start of that lane's path. */
@@ -67,7 +78,12 @@ export function findLaneRoute(graph: LaneGraph, request: RouteRequest): LaneRout
     if (targets.has(start.lane) && (targets.get(start.lane) ?? 0) >= start.s) {
       // Origin and destination on the same lane, the right way round.
       const span = (targets.get(start.lane) ?? 0) - start.s;
-      return { lanes: [start.lane], seconds: span / Math.max(1, lane.speedLimit), length: span };
+      return {
+        lanes: [start.lane],
+        startS: start.s,
+        seconds: span / Math.max(1, lane.speedLimit),
+        length: span,
+      };
     }
     if ((best.get(start.lane) ?? Infinity) <= cost) continue;
     best.set(start.lane, cost);
@@ -87,7 +103,7 @@ export function findLaneRoute(graph: LaneGraph, request: RouteRequest): LaneRout
     settled++;
 
     if (targets.has(current.lane) && cameFrom.has(current.lane)) {
-      return rebuild(graph, cameFrom, current.lane, targets.get(current.lane) ?? 0);
+      return rebuild(graph, cameFrom, current.lane, targets.get(current.lane) ?? 0, startAt);
     }
 
     const lane = graph.lanes[current.lane];
@@ -111,6 +127,7 @@ function rebuild(
   cameFrom: Map<number, number>,
   end: number,
   endS: number,
+  startAt: Map<number, number>,
 ): LaneRoute {
   const lanes: number[] = [end];
   let at = end;
@@ -122,16 +139,19 @@ function rebuild(
   }
   lanes.reverse();
 
+  const startS = startAt.get(lanes[0]) ?? 0;
   let length = 0;
   let seconds = 0;
   lanes.forEach((id, i) => {
     const lane = graph.lanes[id];
     if (!lane) return;
-    const span = i === lanes.length - 1 ? endS : lane.path.length;
+    const from = i === 0 ? startS : 0;
+    const to = i === lanes.length - 1 ? endS : lane.path.length;
+    const span = Math.max(0, to - from);
     length += span;
     seconds += span / Math.max(1, lane.speedLimit);
   });
-  return { lanes, seconds, length };
+  return { lanes, startS, seconds, length };
 }
 
 /** Every lane that runs along a given segment, either way. */

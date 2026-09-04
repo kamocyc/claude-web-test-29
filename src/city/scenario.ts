@@ -40,6 +40,8 @@ const RAIL_HALF = 520;
 const STATION_LENGTH = 120;
 const STATION_OFFSET = 360;
 const STATION_NAMES = ['西町', '東町'] as const;
+/** How far short of the track a station's forecourt stops [m]. */
+const FORECOURT_SETBACK = 30;
 
 export interface ScenarioOptions {
   /** Lay the railway and its two stations. Off in tests that only want roads. */
@@ -109,6 +111,7 @@ export function seedStartingTown(world: CityWorld, options: ScenarioOptions = {}
 
   // Cross streets, north and south of it. Drawn as two separate runs from the
   // main street outward so each one joins it at a proper junction.
+  const crossEnds: { north: Vector3[]; south: Vector3[] } = { north: [], south: [] };
   for (let d = -MAIN_STREET_HALF + BLOCK; d < MAIN_STREET_HALF; d += BLOCK) {
     for (const side of [1, -1] as const) {
       const points: Waypoint[] = [];
@@ -118,12 +121,78 @@ export function seedStartingTown(world: CityWorld, options: ScenarioOptions = {}
       draw(net, field, 'road_small', smoothProfile(field, points, 'road_small', { grade: 0.07 }), {
         straight: true,
       });
+      // The far end of each arm: what the back streets join up, and what the
+      // station approach roads reach back to. Taken from the network rather
+      // than from the waypoint, so it is the node's real height.
+      const tip = points[points.length - 1];
+      const node = net.findNodeNear(
+        new Vector3(tip.x, tip.y ?? field.baseHeightAt(tip.x, tip.z), tip.z),
+        6,
+      );
+      if (node) crossEnds[side === 1 ? 'north' : 'south'].push(node.pos.clone());
     }
   }
 
-  if (rail) seedRailway(world, site);
+  // Back streets joining the ends of the cross streets, north and south.
+  //
+  // Not decoration: without them every cross street is a cul-de-sac, and a
+  // car that has to turn round at the end of every street spends its life
+  // nose to nose with the next one. A grid gives it somewhere to go that is
+  // not back the way it came.
+  //
+  // Laid one block at a time between the existing end nodes, taking each
+  // one's height and tangent, rather than as one run on a profile of its own.
+  // A profile of its own passes over those junctions a metre or two off their
+  // level, and the engine -- rightly -- reads that as a bridge with no
+  // headroom under it and files a clearance warning for every block.
+  for (const side of [1, -1] as const) {
+    const ends = side === 1 ? crossEnds.north : crossEnds.south;
+    for (let i = 1; i < ends.length; i++) joinAlong(world, ends[i - 1], ends[i]);
+  }
+
+  if (rail) seedRailway(world, site, crossEnds.north);
   if (zones) paintOpeningZones(world, site);
   return site;
+}
+
+
+/**
+ * A street between two points on the ground, joined to whatever is already at
+ * either end.
+ *
+ * The anchors are what matter. Drawing to a bare point next to an existing
+ * junction leaves the two a metre apart in height and the engine has to read
+ * the result as one road passing over another; anchoring to the node puts the
+ * new street *on* the junction, at its level and along its tangent.
+ */
+function joinAlong(world: CityWorld, from: Vector3, to: Vector3, spacing = 80): void {
+  const { net, field } = world;
+  const cls = getClass('road_small');
+  const startNode = net.findNodeNear(from, 6);
+  const endNode = net.findNodeNear(to, 6);
+  const span = Math.hypot(to.x - from.x, to.z - from.z);
+  if (span < 20) return;
+  const steps = Math.max(1, Math.round(span / spacing));
+  const points: Waypoint[] = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const x = from.x + (to.x - from.x) * t;
+    const z = from.z + (to.z - from.z) * t;
+    // The ends take the exact height of what they join; between them the
+    // street is interpolated rather than following every hollow, so it does
+    // not dive under the ground it is bridging.
+    const y = i === 0
+      ? from.y
+      : i === steps
+        ? to.y
+        : from.y + (to.y - from.y) * t;
+    points.push({ x, y, z });
+  }
+  draw(net, field, 'road_small', points, {
+    straight: true,
+    start: startNode ? anchorFromNode(net, startNode, cls) : undefined,
+    end: endNode ? anchorFromNode(net, endNode, cls) : undefined,
+  });
 }
 
 /**
@@ -134,7 +203,7 @@ export function seedStartingTown(world: CityWorld, options: ScenarioOptions = {}
  * worth running, so that doubling it, or adding a passing loop, is a decision
  * the player gets to make rather than one already made for them.
  */
-function seedRailway(world: CityWorld, site: Vector3): void {
+function seedRailway(world: CityWorld, site: Vector3, northEnds: Vector3[]): void {
   const { net, field } = world;
   const railZ = site.z + RAIL_OFFSET;
   const from = site.x - RAIL_HALF;
@@ -222,6 +291,29 @@ function seedRailway(world: CityWorld, site: Vector3): void {
   run(new Vector3(from, railYAt(from), trackZ), westA);
   run(eastA, westB);
   run(eastB, new Vector3(to, railYAt(to), trackZ));
+
+  // Approach roads. A station you cannot walk to is a station nobody uses, and
+  // the town's streets stop well short of the railway -- so each station gets
+  // the one road that connects it back to the nearest cross street, ending in
+  // a forecourt short of the track rather than crossing it.
+  for (const station of stations) {
+    if (northEnds.length === 0) break;
+    const nearest = northEnds.reduce((best, end) =>
+      Math.abs(end.x - station.center.x) < Math.abs(best.x - station.center.x) ? end : best);
+    const forecourt = new Vector3(
+      station.center.x,
+      field.baseHeightAt(station.center.x, railZ - FORECOURT_SETBACK),
+      railZ - FORECOURT_SETBACK,
+    );
+    joinAlong(world, nearest, forecourt, 70);
+  }
+
+  // A railway with no service on it is scenery. The town opens with the one
+  // line those two stations can support, so that the first thing the player
+  // learns about lines is what one *does* rather than how to draw one.
+  const line = world.lines.create();
+  line.name = '本線';
+  for (const station of stations) world.lines.addStop(line.id, station.id);
 }
 
 /**
