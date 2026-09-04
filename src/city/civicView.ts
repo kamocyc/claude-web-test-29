@@ -36,36 +36,17 @@ interface Massing {
   cap?: 'tower' | 'mast' | 'dome' | 'wheel';
 }
 
+/**
+ * The two venues the shape library has no recipe for.
+ *
+ * Everything else the city builds -- school, hospital, police, fire, park --
+ * is now drawn by `BuildingView` from the ported library, which knows what
+ * those look like. A stadium and a fairground it does not, so they keep the
+ * massing written here: a shape, a colour and a roofline that say which is
+ * which from across the valley, plus a big wheel, because that is what a
+ * fairground is for.
+ */
 const MASSING: Partial<Record<BuildingType, Massing>> = {
-  [BuildingType.Park]: {
-    half: { x: 15, z: 15 }, height: 0.6,
-    wall: [0.33, 0.62, 0.33], roof: [0.36, 0.68, 0.36],
-    apron: { half: 16, color: [0.3, 0.56, 0.31] },
-  },
-  [BuildingType.School]: {
-    half: { x: 20, z: 11 }, height: 9,
-    wall: [0.9, 0.86, 0.74], roof: [0.55, 0.42, 0.36],
-    apron: { half: 22, color: [0.55, 0.56, 0.5] },
-    cap: 'mast',
-  },
-  [BuildingType.Hospital]: {
-    half: { x: 17, z: 14 }, height: 20,
-    wall: [0.94, 0.94, 0.95], roof: [0.72, 0.24, 0.24],
-    apron: { half: 24, color: [0.5, 0.51, 0.53] },
-    cap: 'tower',
-  },
-  [BuildingType.PoliceStation]: {
-    half: { x: 13, z: 10 }, height: 9,
-    wall: [0.42, 0.5, 0.66], roof: [0.22, 0.28, 0.42],
-    apron: { half: 17, color: [0.45, 0.46, 0.5] },
-    cap: 'mast',
-  },
-  [BuildingType.FireStation]: {
-    half: { x: 14, z: 10 }, height: 9,
-    wall: [0.74, 0.28, 0.24], roof: [0.4, 0.16, 0.14],
-    apron: { half: 17, color: [0.45, 0.46, 0.5] },
-    cap: 'mast',
-  },
   [BuildingType.Stadium]: {
     half: { x: 30, z: 24 }, height: 16,
     wall: [0.8, 0.8, 0.82], roof: [0.5, 0.52, 0.56],

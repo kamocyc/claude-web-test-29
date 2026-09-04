@@ -192,6 +192,8 @@ export class CitySimulation {
 
   /** Plots with nothing on them, refreshed with the world. */
   private freeLots: number[] = [];
+  /** Plots with a building on them, for the plan view. */
+  builtLots = new Set<number>();
   private nextCitizenSeed = 0;
   private lastWorldRevision = -1;
   private lastGrowth = -1;
@@ -730,13 +732,19 @@ export class CitySimulation {
     for (const building of this.buildings) {
       if (building.alive && building.lot >= 0) built.add(building.lot);
     }
-    this.world.builder.builtLots = built;
+    // The engine is told to draw none of them. It draws a plain box per plot,
+    // which was right while that was all the city had; the city now draws its
+    // own with the ported shape library, and two buildings on one plot is one
+    // too many. The set is still kept because the count is the city's own
+    // figure and the plan view reads it.
+    this.world.builder.builtLots = new Set<number>();
     this.world.builder.refreshBuildings();
     // The engine counts plots a building could stand on; from here on the
     // figure is what the city has actually built, so the stats window and the
     // top bar cannot disagree about how many buildings there are.
     const stats = this.world.result?.stats;
     if (stats) stats.buildings = built.size;
+    this.builtLots = built;
   }
 
   /** Everybody without a job takes one, nearest-ish first. */

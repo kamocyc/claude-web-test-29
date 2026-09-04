@@ -35,6 +35,8 @@ export interface PlanOptions {
   civic?: readonly CityBuilding[];
   /** Wash in the catchments, because a facility is being placed right now. */
   showReach?: boolean;
+  /** The plots that have a building on them. */
+  built?: ReadonlySet<number>;
   /** The alignment being previewed by the build tool, if any. */
   preview?: Vector3[] | null;
   /** A point to ring, because something asked to be shown. */
@@ -124,7 +126,7 @@ export class PlanView {
     this.drawTerrain(world);
     if (opts.showZones) this.drawZoneCells(world);
     this.drawNetwork(world);
-    this.drawBuildings(world);
+    this.drawBuildings(world, opts.built);
     if (opts.civic) this.drawCivic(opts.civic, opts.showReach ?? false);
     this.drawStations(world);
     this.drawVehicles(world);
@@ -206,9 +208,8 @@ export class PlanView {
   }
 
   /** Buildings, as the footprint the 3D view puts a building on. */
-  private drawBuildings(world: CityWorld): void {
+  private drawBuildings(world: CityWorld, built?: ReadonlySet<number>): void {
     const { ctx } = this;
-    const built = world.builder.builtLots;
     for (const [index, lot] of world.lots.entries()) {
       if (built && !built.has(index)) continue;
       const [r, g, b] = ZONE_COLORS[lot.zone];

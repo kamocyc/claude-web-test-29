@@ -7,12 +7,15 @@ import {
   Mesh,
   PerspectiveCamera,
   PCFSoftShadowMap,
+  PMREMGenerator,
   Raycaster,
   Scene,
   SRGBColorSpace,
   Vector2,
   Vector3,
   WebGLRenderer,
+  type Texture,
+  type WebGLRenderTarget,
 } from 'three';
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js';
 import { VIEW_DISTANCE } from '../core/units';
@@ -49,6 +52,22 @@ export class Viewport {
   readonly sunDirection = new Vector3(0, 1, 0);
   private elapsed = 0;
   private lastFrameAt = performance.now();
+  /**
+   * The sky, baked into an environment map.
+   *
+   * Not a nicety. Every standard material in the scene takes a good part of
+   * its ambient from `scene.environment`, and with nothing there glass and
+   * metal have nothing to reflect and walls light only from the sun and the
+   * hemisphere -- which is why the buildings came out of the port looking
+   * like dark cardboard while the ground beside them looked fine.
+   *
+   * Baking is not cheap, so it is redone only when the time of day has moved
+   * enough to matter.
+   */
+  private readonly pmrem: PMREMGenerator;
+  private readonly skyScene = new Scene();
+  private envTarget: WebGLRenderTarget | null = null;
+  private envAt = -1;
   private readonly raycaster = new Raycaster();
   private readonly pointer = new Vector2();
   /** 一人称視点に入る前の視点。降りたときに戻す。 */
@@ -102,6 +121,11 @@ export class Viewport {
     this.scene.add(this.sun.target);
 
     this.scene.add(this.sky.mesh);
+    // A second dome sharing the same material, in a scene of its own, is what
+    // the environment map is baked from.
+    this.skyScene.add(this.sky.clone(10));
+    this.pmrem = new PMREMGenerator(this.renderer);
+    this.pmrem.compileEquirectangularShader();
     this.fx = new PostFx(this.renderer, this.scene, this.camera);
 
     window.addEventListener('resize', () => this.resize());
@@ -142,6 +166,21 @@ export class Viewport {
           ? -0.7
           : 0.1;
     this.fx.setMood(atmo.nightAmount, warmth);
+    this.updateEnvironment(dayFraction);
+  }
+
+  /** Re-bake the sky's reflection, when the sky has moved enough to show. */
+  private updateEnvironment(dayFraction: number): void {
+    if (this.envAt >= 0 && Math.abs(dayFraction - this.envAt) < 0.006) return;
+    this.envAt = dayFraction;
+    // The dome reads its uniforms at bake time, so it has to be told the
+    // atmosphere before the bake, not after it.
+    this.sky.update(this.atmosphere, this.sunDirection, { x: 0, y: 0, z: 0 }, this.elapsed);
+    const previous = this.envTarget;
+    this.envTarget = this.pmrem.fromScene(this.skyScene, 0, 0.1, 100);
+    this.scene.environment = this.envTarget.texture as Texture;
+    this.scene.environmentIntensity = 1;
+    previous?.dispose();
   }
 
   /** How dark it is now, 0..1. Anything that lights up at night reads this. */

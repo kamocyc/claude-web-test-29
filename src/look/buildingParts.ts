@@ -2425,6 +2425,36 @@ export class BuildingParts {
     return n;
   }
 
+  /**
+   * 棟ごとの向き (移植先で足した)。
+   *
+   * 移植元の街路は格子だったので、建物はすべて軸に平行で済んでいた。
+   * 移植先の道路は自由な線形なので、敷地は道に沿って任意の角度を向く。
+   * 造形 (`buildingShapes`) は軸平行のまま書かれているので、**部品を置く
+   * 最後の 1 か所**でまとめて回す。ここを通らない部品は 1 つも無い。
+   */
+  private frameX = 0;
+  private frameZ = 0;
+  private frameSin = 0;
+  private frameCos = 1;
+  private framed = false;
+
+  /** これ以降に積む部品を、(cx, cz) を中心に `yaw` だけ回す。 */
+  setFrame(cx: number, cz: number, yaw: number): void {
+    this.frameX = cx;
+    this.frameZ = cz;
+    this.frameSin = Math.sin(yaw);
+    this.frameCos = Math.cos(yaw);
+    this.framed = yaw !== 0;
+  }
+
+  /** 回転を解く。 */
+  clearFrame(): void {
+    this.framed = false;
+    this.frameSin = 0;
+    this.frameCos = 1;
+  }
+
   private put(
     kit: KitName,
     x: number,
@@ -2441,6 +2471,13 @@ export class BuildingParts {
     p2: number,
     p3: number,
   ): void {
+    if (this.framed) {
+      const dx = x - this.frameX;
+      const dz = z - this.frameZ;
+      x = this.frameX + dx * this.frameCos + dz * this.frameSin;
+      z = this.frameZ - dx * this.frameSin + dz * this.frameCos;
+      rotY += Math.atan2(this.frameSin, this.frameCos);
+    }
     tmpPos.set(x, y, z);
     tmpScl.set(w, h, d);
     if (rotY === 0 && tilt === 0) tmpQuat.identity();

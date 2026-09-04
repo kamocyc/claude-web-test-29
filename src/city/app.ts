@@ -8,6 +8,7 @@ import { ZONE_LABELS, ZONE_TYPES, type ZoneType } from '../track/network/zoning'
 import type { BuildingType } from '../core/types';
 import type { CityBuilding } from './buildings';
 import { civicKind, type SiteRefusal } from './civic';
+import { BuildingView } from './buildingView';
 import { CivicView } from './civicView';
 import { NatureLayer } from './nature';
 import { WaterLayer } from './water';
@@ -72,6 +73,15 @@ export class CityApp {
    */
   civicType: BuildingType | null = null;
 
+  /**
+   * The buildings.
+   *
+   * The engine draws a building on every plot, which is right for an editor
+   * and wrong for a city; the city draws its own, with the shape library, and
+   * tells the engine to draw none.
+   */
+  private readonly buildingView = new BuildingView();
+  /** The two big venues the shape library has no equivalent for. */
   private readonly civicView = new CivicView();
   /** What grows on the ground the city has not taken. */
   private readonly nature = new NatureLayer();
@@ -108,6 +118,7 @@ export class CityApp {
       this.world.lines,
     );
     this.viewport.scene.add(this.tool.previewGroup);
+    this.viewport.scene.add(this.buildingView.group);
     this.viewport.scene.add(this.civicView.group);
     this.viewport.scene.add(this.nature.group);
     this.viewport.scene.add(this.water.group);
@@ -294,6 +305,8 @@ export class CityApp {
     this.sim.step(dt);
     // Cheap: it compares what is standing with what was drawn and returns at
     // once when nothing has changed, which is almost every frame.
+    this.buildingView.update(this.world, this.sim.buildings);
+    this.buildingView.setTimeOfDay(this.sim.minuteOfDay / 1440);
     this.civicView.update(this.sim.buildings, this.world.field);
     this.nature.update(this.world, this.sim.day, this.viewport.controls.target);
     this.water.update(this.viewport.atmosphere, this.viewport.sunDirection, this.clock);
@@ -326,6 +339,7 @@ export class CityApp {
         cursor: this.cursor,
         showZones: this.tool.mode === 'zone',
         civic: this.sim.civic,
+        built: this.sim.builtLots,
         showReach: this.civicType !== null,
       });
     }

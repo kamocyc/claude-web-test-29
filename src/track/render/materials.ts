@@ -254,7 +254,11 @@ vec3 terrainColor(float slopeDeg, float height, vec2 world) {
   // 水際だけ砂浜にする。水面からの高さで見るので、水面が 0 でない世界でも
   // 帯の幅は変わらない。
   c = mix(sand, c, smoothstep(0.0, 2.4, height - uWaterLevel));
-  return c;
+
+  // 上の定数は sRGB の 16 進をそのまま小数にしたもの。ここはリニア空間なので
+  // 変換して返す。省くと地面が 2 倍以上明るくなり、環境マップを足した途端に
+  // 一面が白茶けたミント色になる (実際そうなった)。
+  return pow(c, vec3(2.2));
 }`,
       )
       .replace(
