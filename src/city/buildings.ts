@@ -2,7 +2,7 @@ import { Vector3 } from 'three';
 import type { SegmentId } from '../track/network/network';
 import type { Lot, ZoneType } from '../track/network/zoning';
 import { BuildingType, Industry } from '../core/types';
-import { specFor, type BuildingSpec } from '../world/buildings';
+import { isCivic, specFor, type BuildingSpec } from '../world/buildings';
 import type { CityWorld } from './world';
 
 /**
@@ -144,6 +144,10 @@ export function reattachBuildings(
 
   for (const building of buildings) {
     if (!building.alive) continue;
+    // The city's own buildings do not stand on plots and are never re-matched
+    // to one: a hospital was put somewhere on purpose, and re-laying a street
+    // two blocks away must not move it or knock it down.
+    if (isCivic(building.type)) continue;
     let bestLot = -1;
     let bestDistance = REATTACH_RADIUS * REATTACH_RADIUS;
     for (let dz = -1; dz <= 1; dz++) {

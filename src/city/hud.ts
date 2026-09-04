@@ -3,6 +3,8 @@ import { ZONE_LABELS, ZONE_TYPES, type ZoneType } from '../track/network/zoning'
 import { NETWORK_CLASSES } from '../track/network/classes';
 import type { WorldStats } from '../track/render/worldBuilder';
 import { formatMoney } from '../ui/money';
+import type { BuildingType } from '../core/types';
+import { CIVIC_KINDS } from './civic';
 import type { ViewMode } from './app';
 import { SPEEDS, type CityStats } from './simulation';
 import type { Treasury } from './economy';
@@ -28,6 +30,7 @@ export interface HudCallbacks {
   onView(view: ViewMode): void;
   onPanel(panel: PanelId): void;
   onStationRotate(steps: number): void;
+  onCivic(type: BuildingType): void;
   onSave(): void;
   onLoad(): void;
   onNew(): void;
@@ -53,6 +56,7 @@ export class Hud {
   private readonly classButtons = new Map<string, HTMLButtonElement>();
   private readonly zoneButtons = new Map<ZoneType, HTMLButtonElement>();
   private readonly viewButtons = new Map<ViewMode, HTMLButtonElement>();
+  private readonly civicButtons = new Map<BuildingType, HTMLButtonElement>();
   private readonly speedButtons: HTMLButtonElement[] = [];
   private readonly clockEl: HTMLElement;
   private readonly moneyEl: HTMLElement;
@@ -116,6 +120,17 @@ export class Hud {
       this.zoneButtons.set(zone, b);
     }
 
+    const civic = group('施設');
+    for (const kind of CIVIC_KINDS) {
+      const b = textButton(
+        kind.label,
+        `${kind.label}（${formatMoney(kind.cost)}・範囲 ${kind.reach} m）`,
+        () => this.cb.onCivic(kind.type),
+      );
+      civic.body.appendChild(b);
+      this.civicButtons.set(kind.type, b);
+    }
+
     const height = group('高さ');
     height.body.append(
       textButton('＋3m', '敷設高さを上げる (PageUp)', () => this.cb.onElevation(1)),
@@ -146,8 +161,8 @@ export class Hud {
     );
 
     row.append(
-      modes.root, roads.root, rails.root, zones.root, height.root, views.root,
-      saves.root, windows.root,
+      modes.root, roads.root, rails.root, zones.root, civic.root, height.root,
+      views.root, saves.root, windows.root,
     );
     bottom.append(this.captionEl, row);
 
@@ -175,6 +190,7 @@ export class Hud {
     speed: number,
     view: ViewMode,
     warning: string,
+    civicType: BuildingType | null = null,
   ): void {
     this.clockEl.textContent = clock;
     this.moneyEl.textContent = `${formatMoney(treasury.balance)}　(${
@@ -185,9 +201,16 @@ export class Hud {
     for (const [id, b] of this.classButtons) b.classList.toggle('active', id === status.classId);
     for (const [zone, b] of this.zoneButtons) b.classList.toggle('active', zone === status.zone);
     for (const [id, b] of this.viewButtons) b.classList.toggle('active', id === view);
+    for (const [type, b] of this.civicButtons) b.classList.toggle('active', type === civicType);
+    // Holding a hospital is not being in build mode, whatever the tool says.
+    if (civicType !== null) for (const b of this.modeButtons.values()) b.classList.remove('active');
 
     this.captionEl.textContent = this.hovered
-      || (status.drawing ? '始点を置きました。次のクリックで確定します' : caption(status));
+      || (civicType !== null
+        ? `${CIVIC_KINDS.find((k) => k.type === civicType)?.label ?? ''}を置く場所をクリック`
+        : status.drawing
+          ? '始点を置きました。次のクリックで確定します'
+          : caption(status));
 
     // What the tool is doing right now, in the numbers a surveyor would ask
     // for: how long, how tight, how steep, and what it costs.

@@ -2,6 +2,9 @@ import { Vector3 } from 'three';
 import { MAP_SIZE } from '../track/core/units';
 import type { NetSegment } from '../track/network/network';
 import { ZONE_COLORS } from '../track/build/buildings';
+import type { CityBuilding } from './buildings';
+import { civicKind } from './civic';
+import { civicColor } from './civicView';
 import type { CityWorld } from './world';
 import { WATER_LEVEL } from './terrain';
 
@@ -28,6 +31,10 @@ export interface PlanCamera {
 }
 
 export interface PlanOptions {
+  /** The city's own buildings, which do not stand on the engine's plots. */
+  civic?: readonly CityBuilding[];
+  /** Wash in the catchments, because a facility is being placed right now. */
+  showReach?: boolean;
   /** The alignment being previewed by the build tool, if any. */
   preview?: Vector3[] | null;
   /** A point to ring, because something asked to be shown. */
@@ -118,6 +125,7 @@ export class PlanView {
     if (opts.showZones) this.drawZoneCells(world);
     this.drawNetwork(world);
     this.drawBuildings(world);
+    if (opts.civic) this.drawCivic(opts.civic, opts.showReach ?? false);
     this.drawStations(world);
     this.drawVehicles(world);
     if (opts.preview && opts.preview.length > 1) {
@@ -206,6 +214,52 @@ export class PlanView {
       const [r, g, b] = ZONE_COLORS[lot.zone];
       ctx.fillStyle = `rgb(${Math.round(r * 220)}, ${Math.round(g * 220)}, ${Math.round(b * 220)})`;
       this.fillRotatedRect(lot.center, lot.along, lot.outward, lot.halfFrontage, lot.depth / 2);
+    }
+  }
+
+  /**
+   * The city's own buildings, each with the ground it serves washed around it.
+   *
+   * The catchment is the whole reason to draw these on a map rather than only
+   * in the world: "is this neighbourhood covered" is a question you answer by
+   * looking down at it, and a hospital is a dot until you can see how far its
+   * reach goes.
+   */
+  private drawCivic(buildings: readonly CityBuilding[], showReach: boolean): void {
+    const { ctx } = this;
+    for (const building of buildings) {
+      const kind = civicKind(building.type);
+      if (!kind) continue;
+      const p = this.toScreen(building.at.x, building.at.z);
+      const color = civicColor(building.type);
+
+      // The catchment is an outline by default and a wash only while
+      // something is being placed. Half a dozen washes stacked on top of each
+      // other hide the town they are drawn over, which defeats the purpose:
+      // the question is where the *gaps* are, and you cannot see a gap
+      // through six layers of paint.
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, kind.reach * this.camera.zoom, 0, Math.PI * 2);
+      if (showReach) {
+        ctx.globalAlpha = 0.09;
+        ctx.fillStyle = color;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+      ctx.globalAlpha = 0.5;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([5, 5]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+
+      const size = Math.max(4, kind.half * 2 * this.camera.zoom);
+      ctx.fillStyle = color;
+      ctx.fillRect(p.x - size / 2, p.y - size / 2, size, size);
+      ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(p.x - size / 2, p.y - size / 2, size, size);
     }
   }
 

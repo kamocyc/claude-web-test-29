@@ -4,6 +4,9 @@ import { InfoWindow } from '../ui/window';
 import { button, note, row, section } from '../ui/widgets';
 import { CityApp } from './app';
 import { Hud, type PanelId } from './hud';
+import { CIVIC_KINDS, coverage, REFUSAL_TEXT } from './civic';
+import { isHome } from './buildings';
+import { formatMoney } from '../ui/money';
 import { clearSave, readSave } from './persistence';
 import { DEFAULT_SPEED } from './simulation';
 
@@ -58,6 +61,7 @@ const hud = new Hud(topbar, toolbar, {
   onView: (view) => app.setView(view),
   onPanel: (panel) => windows[panel].toggle(),
   onStationRotate: (steps) => app.tool.rotateStation(steps),
+  onCivic: (type) => app.setCivic(type),
   onSave: () => saveNow(true),
   onLoad: () => loadNow(),
   onNew: () => startOver(),
@@ -159,11 +163,33 @@ for (const canvas of [canvas3d, canvas2d]) {
       return;
     }
     updateCursor(e);
+
+    // A civic building in hand takes the click before the tool sees it.
+    if (app.civicType !== null) {
+      if (!app.cursor) return;
+      const refusal = app.placeCivic(app.cursor);
+      if (refusal) say(REFUSAL_TEXT[refusal]);
+      return;
+    }
+
     app.tool.update(app.cursor, app.modifiers);
+    const status = app.tool.status();
+
+    // The bulldozer takes down the city's own buildings too. Checked first,
+    // because a hospital standing beside a road is nearer the pointer than
+    // the road is, and the player is pointing at the hospital.
+    if (status.mode === 'bulldoze' && app.cursor) {
+      const civic = app.civicAt(app.cursor);
+      if (civic) {
+        app.removeCivic(civic);
+        say('撤去しました');
+        return;
+      }
+    }
+
     // The second click of a run is the one that spends the money, and the
     // status bar has already quoted the price -- so the refusal happens
     // where the player is looking.
-    const status = app.tool.status();
     if (status.mode === 'build' && status.drawing && !app.sim.treasury.canAfford(status.cost)) {
       say('資金が足りません');
       return;
@@ -237,6 +263,7 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (key === 'escape') {
+    app.civicType = null;
     app.tool.cancel();
     return;
   }
@@ -340,7 +367,39 @@ function drawStats(): void {
       row('鉄道網', `${stats.railNetworks}`),
       row('電力網', `${stats.powerNetworks}`),
     ]),
+    civicSection(),
+    section('財政', [
+      row('所持金', formatMoney(app.sim.treasury.balance)),
+      row('昨日の税収', formatMoney(app.sim.treasury.lastDay.income)),
+      row('昨日の支出', formatMoney(app.sim.treasury.lastDay.expenses)),
+      row('建設に使った額', formatMoney(app.sim.treasury.spent)),
+    ]),
   );
+}
+
+/**
+ * The civic buildings, with what each is doing for the people who live near
+ * one -- the share of the city inside its catchment, which is the only
+ * measure of a hospital that means anything.
+ */
+function civicSection(): HTMLElement {
+  const homes = app.sim.buildings.filter((b) => b.alive && isHome(b));
+  const rows: HTMLElement[] = [];
+  for (const kind of CIVIC_KINDS) {
+    const built = app.sim.buildings.filter((b) => b.alive && b.type === kind.type).length;
+    if (built === 0) continue;
+    const served = homes.length === 0
+      ? 0
+      : homes.reduce((n, b) => n + (coverage(app.sim.buildings, kind.type, b.at) > 0 ? 1 : 0), 0);
+    rows.push(row(
+      kind.label,
+      `${built}　住宅の ${homes.length === 0 ? 0 : Math.round((served / homes.length) * 100)}%`,
+    ));
+  }
+  if (rows.length === 0) {
+    return section('公共施設', [note('まだ何も建てていません。下の「施設」から選んで置きます。')]);
+  }
+  return section('公共施設', rows);
 }
 
 function drawLines(): void {
@@ -384,6 +443,11 @@ function buildHelp(body: HTMLElement): void {
       note('既存の線形の端や途中を指すと、位置・接線・勾配を引き継いで接続します。'
         + '線路では曲率も引き継ぎ、分岐は接線に沿ったものだけを置きます。'),
     ]),
+    section('公共施設', [
+      note('下の「施設」から選び、道路の近くの空き地をクリックすると建ちます。'
+        + '効果はその施設の範囲に届く住宅にだけ及びます (平面表示で範囲が見えます)。'),
+      note('公共施設は毎日の維持費がかかります。撤去は「撤去」モードでクリックします。'),
+    ]),
     section('街', [
       note('「保存」でこのブラウザに街を保存します (Ctrl+S)。'
         + 'タブを閉じるときにも自動で保存します。'),
@@ -420,6 +484,7 @@ function frame(now: number): void {
     app.sim.speed,
     app.view,
     notice || worst?.message || '',
+    app.civicType,
   );
   if (now > noticeUntil) notice = '';
   refreshPanels(now);

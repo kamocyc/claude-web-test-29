@@ -58,6 +58,18 @@ export class Treasury {
     return delta;
   }
 
+  /**
+   * Pay for something the city bought outright.
+   *
+   * Separate from `chargeNetwork` because it is a different kind of purchase:
+   * the network's cost is a figure the engine derives and the treasury tracks
+   * the movement of, while a hospital is simply bought, once, for a price.
+   */
+  spend(amount: number): void {
+    this.balance -= amount;
+    this.spent += amount;
+  }
+
   /** Close the day's books. */
   settleDay(input: { employed: number; population: number; upkeep: number }): DayResult {
     const income = input.employed * TAX_PER_JOB + input.population * TAX_PER_RESIDENT;

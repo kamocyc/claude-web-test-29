@@ -23,6 +23,13 @@ import {
   type CityCitizen,
 } from './citizens';
 import { Treasury, type TreasurySave } from './economy';
+import {
+  civicKind,
+  coveredLots,
+  servicesAt,
+  siteRefusal,
+  type SiteRefusal,
+} from './civic';
 import { findLaneRoute, laneStopsNear, type LaneRoute } from './routing';
 import type { LineId } from '../track/network/line';
 import type { ZoneType } from '../track/network/zoning';
@@ -284,7 +291,9 @@ export class CitySimulation {
     // one corner, and the station at the other end of town never sees a
     // passenger because nobody lives or works near it. Deterministic, from the
     // city's own generator, so a seed still builds the same town.
-    this.freeLots = this.rng.shuffled(free);
+    // The plots the city's own buildings stand on are not for sale.
+    const covered = coveredLots(this.world, this.buildings);
+    this.freeLots = this.rng.shuffled(free.filter((i) => !covered.has(i)));
     this.publishBuiltLots();
 
     // Whatever the player laid since the last rebuild is charged for now, out
@@ -750,10 +759,24 @@ export class CitySimulation {
       const commute = worst > 0
         ? Math.max(-100, 100 - (worst / COMMUTE_MISERY) * 100)
         : 70;
+      // What the city has built for them, judged where they live. Worth
+      // twenty points all told: enough that a city with no hospital and
+      // nowhere to go is visibly worse to live in, not so much that services
+      // alone can paper over a commute nobody can make.
+      const home = this.buildings[citizen.home];
+      const services = home?.alive
+        ? servicesAt(this.buildings, home.at)
+        : { health: 0, safety: 0, education: 0, leisure: 0 };
+      const served = services.health * 7
+        + services.safety * 5
+        + services.education * 4
+        + services.leisure * 6;
+
       const score = clamp(
-        (housed ? 45 : 0)
-        + (employed ? 20 : 5)
-        + commute * 0.35
+        (housed ? 38 : 0)
+        + (employed ? 18 : 4)
+        + commute * 0.3
+        + served
         - (citizen.state === CitizenState.Stranded ? 40 : 0),
       );
       citizen.happiness = citizen.happiness < 0
@@ -898,6 +921,68 @@ export class CitySimulation {
     let total = 0;
     for (const b of this.buildings) if (b.alive && isWorkplace(b)) total += b.capacity;
     return total;
+  }
+
+  // -------------------------------------------------------------- civic
+
+  /**
+   * Put up one of the city's own buildings, if it can stand there and the
+   * city can pay for it.
+   *
+   * Returns why not, so the caller can say so rather than doing nothing.
+   */
+  place(type: BuildingType, at: Vector3): SiteRefusal | null {
+    const kind = civicKind(type);
+    if (!kind) return 'space';
+    if (!this.treasury.canAfford(kind.cost)) return 'money';
+    const refusal = siteRefusal(this.world, this.buildings, kind, at);
+    if (refusal) return refusal;
+
+    const spec = specFor(type);
+    const building: CityBuilding = {
+      id: this.buildings.length,
+      type,
+      zone: 'commercial',
+      at: at.clone(),
+      lot: -1,
+      access: null,
+      capacity: spec.capacity,
+      occupants: [],
+      alive: true,
+      powered: true,
+      rawStock: 0,
+      goodsStock: 0,
+      soldToday: 0,
+      starvedHours: 0,
+      visitsToday: 0,
+    };
+    this.buildings.push(building);
+    this.treasury.spend(kind.cost);
+    // Take its ground off the market now rather than at the next rebuild, or
+    // a house goes up inside the park before anybody notices.
+    const covered = coveredLots(this.world, [building]);
+    this.freeLots = this.freeLots.filter((i) => !covered.has(i));
+    // Its staff are jobs like any other, so let the city fill them now rather
+    // than at the next hour: a hospital that stands empty until the clock
+    // ticks over reads as broken.
+    this.assignJobs();
+    return null;
+  }
+
+  /** Take one of the city's own buildings down. No refund. */
+  demolish(building: CityBuilding): void {
+    if (!civicKind(building.type)) return;
+    building.alive = false;
+    for (const id of building.occupants) {
+      const citizen = this.citizens[id];
+      if (citizen && citizen.work === building.id) citizen.work = -1;
+    }
+    building.occupants = [];
+  }
+
+  /** The city's own buildings, for the panels and the views. */
+  get civic(): CityBuilding[] {
+    return this.buildings.filter((b) => b.alive && civicKind(b.type) !== null);
   }
 
   // ------------------------------------------------------------- saving

@@ -4,6 +4,10 @@ import { Viewport } from '../track/app/viewport';
 import { SnapView } from '../track/render/snapView';
 import { NETWORK_CLASSES } from '../track/network/classes';
 import { ZONE_LABELS, ZONE_TYPES, type ZoneType } from '../track/network/zoning';
+import type { BuildingType } from '../core/types';
+import type { CityBuilding } from './buildings';
+import { civicKind, type SiteRefusal } from './civic';
+import { CivicView } from './civicView';
 import { applyCity, captureCity, writeSave, type CitySave } from './persistence';
 import { PlanView } from './plan';
 import { seedStartingTown } from './scenario';
@@ -54,6 +58,18 @@ export class CityApp {
   cursor: Vector3 | null = null;
   readonly modifiers = { straight: false, noSnap: false };
 
+  /**
+   * The civic building waiting to be placed, or null.
+   *
+   * Held here rather than in the build tool because the build tool is the
+   * engine's, and it lays alignments -- putting a hospital somewhere is not
+   * an alignment. The two are mutually exclusive from the player's side, so
+   * choosing one clears the other.
+   */
+  civicType: BuildingType | null = null;
+
+  private readonly civicView = new CivicView();
+
   /** A place to ring because a warning or a panel asked to be shown. */
   private focus: Vector3 | null = null;
   private focusUntil = 0;
@@ -84,10 +100,12 @@ export class CityApp {
       this.world.lines,
     );
     this.viewport.scene.add(this.tool.previewGroup);
+    this.viewport.scene.add(this.civicView.group);
 
     if (options.save) {
       applyCity(this.world, this.sim, options.save);
       this.centre = centreOf(this.world);
+      this.civicView.update(this.sim.buildings, this.world.field);
     } else {
       // The town picks its own site on the generated ground, so the camera has
       // to be told where it ended up rather than assuming the origin.
@@ -96,6 +114,42 @@ export class CityApp {
     }
     this.plan.centerOn(this.centre.x, this.centre.z);
     this.lookAt(this.centre.x, this.centre.z, 520);
+  }
+
+  // ------------------------------------------------------------------ civic
+
+  /** Take a civic building in hand. The build tool stands down. */
+  setCivic(type: BuildingType): void {
+    this.tool.cancel();
+    this.tool.setMode('inspect');
+    this.world.builder.setZoneView(false);
+    this.world.builder.setLineView(false);
+    this.civicType = type;
+  }
+
+  /** Put the building in hand down here. Returns why not, or null. */
+  placeCivic(at: Vector3): SiteRefusal | null {
+    if (this.civicType === null) return null;
+    const refusal = this.sim.place(this.civicType, at);
+    if (!refusal) this.civicView.update(this.sim.buildings, this.world.field);
+    return refusal;
+  }
+
+  /** The city's own building at a point, if the pointer is over one. */
+  civicAt(at: Vector3): CityBuilding | null {
+    for (const building of this.sim.buildings) {
+      if (!building.alive) continue;
+      const kind = civicKind(building.type);
+      if (!kind) continue;
+      if (building.at.distanceTo(at) <= kind.half) return building;
+    }
+    return null;
+  }
+
+  /** Take one down. */
+  removeCivic(building: CityBuilding): void {
+    this.sim.demolish(building);
+    this.civicView.update(this.sim.buildings, this.world.field);
   }
 
   // ----------------------------------------------------------------- saving
@@ -118,6 +172,7 @@ export class CityApp {
   load(save: CitySave): boolean {
     if (save.seed !== this.world.seed) return false;
     applyCity(this.world, this.sim, save);
+    this.civicView.update(this.sim.buildings, this.world.field);
     this.tool.cancel();
     this.world.traffic.reset(this.world.laneGraph);
     this.world.traffic.setLines(this.world.builder.linePlans);
@@ -186,6 +241,7 @@ export class CityApp {
   }
 
   setMode(mode: ToolMode): void {
+    this.civicType = null;
     this.tool.setMode(mode);
     this.world.builder.setZoneView(mode === 'zone');
     this.world.builder.setLineView(mode === 'line');
@@ -219,6 +275,9 @@ export class CityApp {
     // things. Both read the same clock, so a car never sits at a light the
     // renderer is drawing green.
     this.sim.step(dt);
+    // Cheap: it compares what is standing with what was drawn and returns at
+    // once when nothing has changed, which is almost every frame.
+    this.civicView.update(this.sim.buildings, this.world.field);
     this.clock = this.world.traffic.time;
     this.world.builder.animate(this.clock, 0);
 
@@ -242,6 +301,8 @@ export class CityApp {
         focus: this.focus,
         cursor: this.cursor,
         showZones: this.tool.mode === 'zone',
+        civic: this.sim.civic,
+        showReach: this.civicType !== null,
       });
     }
   }
