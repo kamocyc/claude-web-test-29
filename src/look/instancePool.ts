@@ -31,6 +31,15 @@ export class InstancePool {
    */
   private visible = true;
   private order = 0;
+  /**
+   * 影の設定もプールが覚える (移植先で足した)。
+   *
+   * `visible` と `renderOrder` を覚えているのと同じ理由。木は既定の容量を
+   * すぐ越えるので、覚えずにいると**最初のフレームが出る前に**容量が倍に
+   * なり、1 本を除く全部が影を落とさなくなる (実際にそうなっていた)。
+   */
+  private castShadow = false;
+  private receiveShadow = false;
 
   constructor(
     private geometry: BufferGeometry,
@@ -48,6 +57,8 @@ export class InstancePool {
     m.count = 0;
     m.visible = this.visible;
     m.renderOrder = this.order;
+    m.castShadow = this.castShadow;
+    m.receiveShadow = this.receiveShadow;
     // 道路の小物はマップ全体に散らばるので、区画に切らない限りカリングは効かない。
     // 効かないカリングのために毎フレーム境界球を計算するほうが無駄なので切る。
     m.frustumCulled = false;
@@ -107,6 +118,14 @@ export class InstancePool {
   }
 
   /** 描画順（加算合成の板を最後に描くなど）。`grow()` を跨いでも保たれる。 */
+  /** 影の設定。容量が伸びても引き継がれる。 */
+  setShadows(cast: boolean, receive = cast): void {
+    this.castShadow = cast;
+    this.receiveShadow = receive;
+    this.mesh.castShadow = cast;
+    this.mesh.receiveShadow = receive;
+  }
+
   setRenderOrder(o: number): void {
     this.order = o;
     this.mesh.renderOrder = o;

@@ -2302,6 +2302,12 @@ class Kit {
   }
 
   private grow(): void {
+    // 古いバッファを解放してから差し替える (移植先で足した)。属性を
+    // 付け替えるだけだと、three が前のバッファを消す機会を失う
+    // (解放は mesh / geometry の dispose イベント経由でしか起きない)。
+    // どちらも次の描画で作り直されるので、捨てて構わない。
+    this.mesh.dispose();
+    this.mesh.geometry.dispose();
     this.capacity *= 2;
     const m = new Float32Array(this.capacity * 16);
     m.set(this.matrices);
@@ -2407,7 +2413,15 @@ export class BuildingParts {
       // 用途ごとに 5 通りの 1 階を描き分ける。
       front: new Kit(frontGeometry(), plainMat, 4096),
     };
-    for (const k of Object.values(this.kits)) this.group.add(k.mesh);
+    for (const k of Object.values(this.kits)) {
+      // 影を落とし、受ける (移植先で足した)。移植元では建物の影は
+      // レンダラ側でまとめて設定していた。ここが抜けていると、木も車も
+      // 地面に影を落としているのに建物だけ落とさず、日が低いほど
+      // 「建物が地面から浮いている」絵になる。
+      k.mesh.castShadow = true;
+      k.mesh.receiveShadow = true;
+      this.group.add(k.mesh);
+    }
   }
 
   reset(): void {

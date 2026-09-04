@@ -77,6 +77,14 @@ export class NatureLayer {
   /** What was planted last, so an unchanged world is not replanted. */
   private signature = '';
   private season: Season = Season.Summer;
+  /**
+   * Where the city is, stamped into a grid.
+   *
+   * Kept across pans and rebuilt only when the network changes. Re-stamping
+   * every segment because the camera moved was half the cost of replanting,
+   * and the answer it produces does not depend on where the camera is.
+   */
+  private taken: { revision: number; near(x: number, z: number): boolean } | null = null;
 
   constructor() {
     const material = createPropMaterial();
@@ -86,7 +94,9 @@ export class NatureLayer {
     this.bamboo = new InstancePool(first.bamboo, material, this.group, true, 512);
     this.shrub = new InstancePool(first.shrub, material, this.group, true, 1024);
     this.rock = new InstancePool(rockGeometry(1, false), material, this.group, true, 256);
-    for (const pool of this.pools) pool.mesh.castShadow = true;
+    // Through the pool, not on the mesh: the mesh is replaced when the pool
+    // grows, and trees overflow their first capacity before the opening frame.
+    for (const pool of this.pools) pool.setShadows(true, false);
   }
 
   private get pools(): InstancePool[] {
@@ -111,8 +121,10 @@ export class NatureLayer {
    */
   update(world: CityWorld, day: number, centre: Vector3): void {
     const season = seasonOnDay(day);
-    const cx = Math.round(centre.x / 400) * 400;
-    const cz = Math.round(centre.z / 400) * 400;
+    // Big steps. Replanting is the most expensive thing this layer does, so
+    // it should happen when the view has really moved, not while panning.
+    const cx = Math.round(centre.x / 700) * 700;
+    const cz = Math.round(centre.z / 700) * 700;
     const signature = `${world.revision}:${season}:${cx},${cz}`;
     if (signature === this.signature) return;
     this.signature = signature;
@@ -132,7 +144,10 @@ export class NatureLayer {
   private plant(world: CityWorld, cx: number, cz: number): void {
     for (const pool of this.pools) pool.begin();
 
-    const taken = occupancy(world);
+    if (!this.taken || this.taken.revision !== world.revision) {
+      this.taken = { revision: world.revision, ...occupancy(world) };
+    }
+    const taken = this.taken;
     const matrix = new Matrix4();
     const quaternion = new Quaternion();
     const scale = new Vector3();
@@ -155,7 +170,8 @@ export class NatureLayer {
         if (slope > BARE_SLOPE) {
           // Rock, not woodland -- and sparse, or a hillside turns to rubble.
           if (r < 0.86) continue;
-          place(this.rock, matrix, quaternion, scale, at.set(px, y, pz), 1.4 + r * 2.4, r);
+          const rockSpin = hash2(px * 0.53, pz * 0.53);
+          place(this.rock, matrix, quaternion, scale, at.set(px, y, pz), 1.4 + rockSpin * 2.4, rockSpin);
           continue;
         }
 
@@ -167,15 +183,23 @@ export class NatureLayer {
         const wants = wooded ? 0.28 + density * 0.62 : density * 0.34;
         if (r > wants) continue;
 
+        // Independent draws for what grows and which way it faces. Reusing
+        // `r` -- which has just been through a "less than the density" test --
+        // correlates the species with the density: off the wooded ground it
+        // can never exceed 0.34, so a shrub (which needs 0.45) was never
+        // planted at all, and a bamboo needed a one-in-a-thousand cell.
+        const kindRoll = hash2(px * 0.71 + 13.3, pz * 0.71 - 7.1);
+        const spin = hash2(pz * 1.31 + 5.7, px * 1.31 + 2.9);
+
         const height = 4 + hash2(px, pz) * (wooded ? 8 : 5);
         const shade = 0.82 + hash2(pz, px) * 0.34;
         tint.setRGB(shade, shade * 0.99, shade * 0.96);
 
         const pool = wooded
-          ? (r < 0.62 ? this.conifer : r < 0.86 ? this.broadleaf : this.bamboo)
-          : (r < 0.45 ? this.broadleaf : this.shrub);
+          ? (kindRoll < 0.62 ? this.conifer : kindRoll < 0.86 ? this.broadleaf : this.bamboo)
+          : (kindRoll < 0.45 ? this.broadleaf : this.shrub);
         const size = pool === this.shrub ? height * 0.35 : height;
-        place(pool, matrix, quaternion, scale, at.set(px, y, pz), size, r, tint);
+        place(pool, matrix, quaternion, scale, at.set(px, y, pz), size, spin, tint);
       }
     }
 

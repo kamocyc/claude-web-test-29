@@ -62,8 +62,6 @@ export class Pedestrians {
   private readonly yawQ = new Quaternion();
   private readonly swingQ = new Quaternion();
   private readonly limbQ = new Quaternion();
-  private readonly pivotV = new Vector3();
-  private readonly backV = new Vector3();
   private readonly limbPos = new Vector3();
   private readonly footV = new Vector3();
   private readonly tint = new Color();
@@ -77,7 +75,7 @@ export class Pedestrians {
     this.limbB = new InstancePool(limbGeometry(-1), material, this.group, true, 512);
     this.simple = new InstancePool(simpleGeometry(), material, this.group, true, 1024);
     for (const pool of [this.body, this.limbA, this.limbB, this.simple]) {
-      pool.mesh.castShadow = true;
+      pool.setShadows(true, false);
     }
   }
 
@@ -159,13 +157,15 @@ export class Pedestrians {
    */
   private pushLimbs(phase: number, tint: Color, yaw: Quaternion, foot: Vector3): void {
     const swing = Math.sin(phase) * 0.55;
+    // The limb geometry is authored with its **origin at the pivot** -- every
+    // box in it is offset by -LIMB_PIVOT_Y -- so the instance goes at the
+    // pivot and nothing else has to be undone. Treating the origin as the
+    // foot instead (which the first version did) sinks the legs a metre into
+    // the road and slides the hip sideways as they swing.
+    this.limbPos.set(foot.x, foot.y + LIMB_PIVOT_Y, foot.z);
     for (const [pool, sign] of [[this.limbA, 1], [this.limbB, -1]] as const) {
       this.swingQ.setFromAxisAngle(RIGHT, swing * sign);
       this.limbQ.copy(yaw).multiply(this.swingQ);
-      // world = p + yaw*(0,h,0) - (yaw*swing)*(0,h,0) + (yaw*swing)*v
-      this.pivotV.set(0, LIMB_PIVOT_Y, 0).applyQuaternion(yaw);
-      this.backV.set(0, LIMB_PIVOT_Y, 0).applyQuaternion(this.limbQ);
-      this.limbPos.copy(foot).add(this.pivotV).sub(this.backV);
       this.matrix.compose(this.limbPos, this.limbQ, ONE);
       pool.push(this.matrix, tint);
     }

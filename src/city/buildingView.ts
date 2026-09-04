@@ -85,7 +85,7 @@ export class BuildingView {
   private readonly wall = new Color();
   private readonly roof = new Color();
   private readonly ctx: BuildCtx;
-  private signature = '';
+  private signature = -1;
 
   constructor() {
     this.group.name = 'city-buildings';
@@ -123,15 +123,27 @@ export class BuildingView {
     setBuildingSky(atmo.zenith, atmo.horizon, sun, atmo.sunColor, atmo.sunIntensity);
   }
 
-  /** Rebuild, but only when what is standing has changed. */
+  /**
+   * Rebuild, but only when what is standing has changed.
+   *
+   * The check runs every frame, so it is a number rolled up in one pass
+   * rather than a list of strings: building a key out of every building's id
+   * and plot allocated a megabyte a second in a large city, to answer a
+   * question that is nearly always "nothing has changed".
+   */
   update(world: CityWorld, buildings: readonly CityBuilding[]): void {
-    const standing = buildings.filter((b) => b.alive);
-    const signature = `${world.revision}:${standing.map((b) => `${b.id}.${b.lot}`).join(',')}`;
+    let signature = Math.imul(world.revision + 1, 2654435761) >>> 0;
+    for (const building of buildings) {
+      if (!building.alive) continue;
+      signature = (Math.imul(signature ^ building.id, 16777619) ^ building.lot) >>> 0;
+    }
     if (signature === this.signature) return;
     this.signature = signature;
 
     this.parts.reset();
-    for (const building of standing) this.compose(world, building);
+    for (const building of buildings) {
+      if (building.alive) this.compose(world, building);
+    }
     this.parts.clearFrame();
     this.parts.flush();
   }

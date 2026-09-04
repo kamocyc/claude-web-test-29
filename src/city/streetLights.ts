@@ -73,8 +73,10 @@ export class StreetLights {
 
     this.heads = new InstancePool(lampGeometry(), this.headMaterial, this.group, false, 512);
     this.pools = new InstancePool(poolGeometry(), this.poolMaterial, this.group, false, 512);
-    this.pools.mesh.renderOrder = 3;
-    this.heads.mesh.renderOrder = 4;
+    // Through the pool: a town with more than 512 lamps in view grows these,
+    // and a render order written straight onto the mesh is lost when it does.
+    this.pools.setRenderOrder(3);
+    this.heads.setRenderOrder(4);
   }
 
   /** Fade the lamps up with the evening. */

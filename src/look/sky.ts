@@ -124,6 +124,28 @@ const current: Atmosphere = {
   nightAmount: 0,
 };
 
+/**
+ * 空の状態を入れる新しい入れ物 (移植先で足した)。
+ *
+ * `atmosphereAt` の既定の出力先はモジュール共有の 1 個なので、返り値を
+ * 持ち続ける側は自分の入れ物を用意する必要がある。持ち続けたまま別の
+ * 呼び出しが走ると、黙って上書きされる。
+ */
+export function newAtmosphere(): Atmosphere {
+  return {
+    zenith: new Color(),
+    horizon: new Color(),
+    sunColor: new Color(),
+    sunIntensity: 1,
+    skyLight: new Color(),
+    groundLight: new Color(),
+    ambientIntensity: 1,
+    exposure: 1,
+    starAmount: 0,
+    nightAmount: 0,
+  };
+}
+
 /** 滑らかな補間。線形のままだと正午前後で日射の変化が折れ線に見える。 */
 function smooth(t: number): number {
   return t * t * (3 - 2 * t);

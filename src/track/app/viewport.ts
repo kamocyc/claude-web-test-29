@@ -19,7 +19,13 @@ import {
 } from 'three';
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js';
 import { VIEW_DISTANCE } from '../core/units';
-import { atmosphereAt, SkyDome, sunDirection, type Atmosphere } from '../../look/sky';
+import {
+  atmosphereAt,
+  newAtmosphere,
+  SkyDome,
+  sunDirection,
+  type Atmosphere,
+} from '../../look/sky';
 import { PostFx } from '../../look/postfx';
 
 /**
@@ -46,8 +52,15 @@ export class Viewport {
   readonly sky = new SkyDome(VIEW_DISTANCE * 1.5);
   /** 仕上げの一段。重い環境では自分で降りる。 */
   readonly fx: PostFx;
-  /** いまの大気。時刻から連続で作る。 */
-  readonly atmosphere: Atmosphere = atmosphereAt(0.5);
+  /**
+   * いまの大気。時刻から連続で作る。
+   *
+   * 自分の入れ物に書かせる。`atmosphereAt` の既定の出力先はモジュール
+   * 共有の 1 個なので、既定のまま持ち続けると、建物レイヤなど別の
+   * 呼び出しに黙って上書きされる (いまは同じ時刻を渡しているので害は
+   * 無いが、時刻の出どころが 1 つ増えた時点で壊れる)。
+   */
+  readonly atmosphere: Atmosphere = atmosphereAt(0.5, newAtmosphere());
   /** Where the sun is now. The water reflects it, so it is not private. */
   readonly sunDirection = new Vector3(0, 1, 0);
   private elapsed = 0;
