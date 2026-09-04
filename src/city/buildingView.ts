@@ -1,4 +1,15 @@
-import { Color, Object3D, Vector3 } from 'three';
+import {
+  Color,
+  DoubleSide,
+  MeshStandardMaterial,
+  Matrix4,
+  Object3D,
+  PlaneGeometry,
+  Quaternion,
+  Vector3,
+} from 'three';
+import { InstancePool } from '../look/instancePool';
+import { GROUND } from '../look/groundPalette';
 import { BuildingType } from '../core/types';
 import { BuildingParts, setBuildingNight, setBuildingSky } from '../look/buildingParts';
 import { composeBuilding, rnd, type BuildCtx, type Facing } from '../look/buildingShapes';
@@ -32,6 +43,16 @@ import type { CityWorld } from './world';
  * placed -- see `BuildingParts.setFrame`.
  */
 
+/**
+ * The uses whose empty ground is paved rather than bare.
+ *
+ * A house that has not been built yet stands on a graded plot of earth; a
+ * warehouse yard is concrete from the kerb to the back fence. Making the
+ * distinction is what stops a whole zoned district reading as one sheet of
+ * brown card while it fills in.
+ */
+const PAVED_ZONES = new Set<ZoneType>(['commercial', 'office', 'industrial', 'fishery', 'mining']);
+
 /** What each painted use is built as. Several keys per use, chosen by hash. */
 const ZONE_KEYS: Record<ZoneType, readonly string[]> = {
   residential: ['house', 'house', 'house', 'apartment'],
@@ -54,6 +75,7 @@ const CIVIC_KEYS: Partial<Record<BuildingType, string>> = {
   [BuildingType.Park]: 'park',
 };
 
+const UP = new Vector3(0, 1, 0);
 const hsl = { h: 0, s: 0, l: 0 };
 const sun = new Vector3();
 
@@ -87,9 +109,37 @@ export class BuildingView {
   private readonly ctx: BuildCtx;
   private signature = -1;
 
+  /**
+   * The ground of plots that are zoned but not yet built on.
+   *
+   * Without it, painting a district changes nothing you can see until a
+   * building appears on it, and the town's edge is lawn right up to the kerb.
+   * A plot waiting for a building is graded earth or a concrete yard, and
+   * showing the *material* rather than the zone's colour keeps it looking
+   * like ground instead of like a data overlay.
+   */
+  private readonly pads: InstancePool;
+  private readonly padMaterial: MeshStandardMaterial;
+
   constructor() {
     this.group.name = 'city-buildings';
     this.group.add(this.parts.group);
+
+    const pad = new PlaneGeometry(1, 1);
+    pad.rotateX(-Math.PI / 2);
+    this.padMaterial = new MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.96,
+      metalness: 0,
+      side: DoubleSide,
+      // Just above the terrain, and biased, or the two surfaces argue about
+      // which is in front and the plot flickers as the camera moves.
+      polygonOffset: true,
+      polygonOffsetFactor: 0,
+      polygonOffsetUnits: -3,
+    });
+    this.pads = new InstancePool(pad, this.padMaterial, this.group, true, 512);
+    this.pads.setShadows(false, true);
     this.ctx = {
       e: this.parts,
       cx: 0,
@@ -141,11 +191,43 @@ export class BuildingView {
     this.signature = signature;
 
     this.parts.reset();
+    const taken = new Set<number>();
     for (const building of buildings) {
-      if (building.alive) this.compose(world, building);
+      if (!building.alive) continue;
+      if (building.lot >= 0) taken.add(building.lot);
+      this.compose(world, building);
     }
     this.parts.clearFrame();
     this.parts.flush();
+    this.layPads(world, taken);
+  }
+
+  /** Bare ground on every plot nobody has built on yet. */
+  private layPads(world: CityWorld, taken: ReadonlySet<number>): void {
+    const matrix = new Matrix4();
+    const quaternion = new Quaternion();
+    const scale = new Vector3();
+    const at = new Vector3();
+    const tint = new Color();
+
+    this.pads.begin();
+    world.lots.forEach((lot, index) => {
+      if (taken.has(index)) return;
+      const hash = positionHash(lot.center.x, lot.center.z);
+      const paved = PAVED_ZONES.has(lot.zone);
+      tint.setHex(paved ? GROUND.lotPaved : GROUND.lotBare);
+      // A shade per plot, or a row of empty ones is a single flat rectangle.
+      const shade = 0.9 + ((hash >>> 7) % 20) / 100;
+      tint.multiplyScalar(shade);
+
+      // Square to the road, like the building that will stand here.
+      quaternion.setFromAxisAngle(UP, Math.atan2(-lot.along.z, lot.along.x));
+      at.set(lot.center.x, lot.padY + 0.02, lot.center.z);
+      scale.set(lot.halfFrontage * 2 * 0.94, 1, lot.depth * 0.94);
+      matrix.compose(at, quaternion, scale);
+      this.pads.push(matrix, tint);
+    });
+    this.pads.end();
   }
 
   private compose(world: CityWorld, building: CityBuilding): void {
