@@ -2,9 +2,13 @@
 
 線形（アライメント）で敷く3D都市シミュレーション。道路と鉄道は
 **曲率・勾配・カントを持った実物の線形**として引かれ、その上を市民1人1人の
-車と列車が走る。
+車と列車が走る。時刻とともに空と光が動き、夜になると窓と街灯が点く。
 
 TypeScript + Vite + three.js + Canvas 2D。
+
+2つのリポジトリからの移植で出来ている —
+線形エンジンと敷設 UX は [claude-web-test-22](https://github.com/kamocyc/claude-web-test-22)、
+描画は [claude-web-test-21](https://github.com/kamocyc/claude-web-test-21) から。
 
 ```bash
 npm install
@@ -104,6 +108,42 @@ npm run build   # 型検査 + 本番ビルド
 保存はボタン、`Ctrl+S`、それとタブを閉じるとき。タイマーでは保存しない
 （考えている最中に走る保存は、頼んでいない保存だ）。
 
+## 絵づくり
+
+描画は **kamocyc/claude-web-test-21** から移植した（`src/look/`）。要点は
+「1 組の値がすべてを決める」ことにある。
+
+**空と光は同じ 1 か所から来る。** 時刻から大気（天頂色・地平色・日射色と強さ・
+環境光・露出・夜の度合い）を作り、それを空のドーム・フォグ・半球光・太陽の色と
+角度・トーンマッピングの露出に配る。別々に設定すると、夕焼けの空の下に真昼の光が
+当たっている絵ができ、理由は言えないのに間違って見える。影は太陽と一緒に動くので、
+朝は西へ、夕は東へ長く伸びる。
+
+**空は環境マップにも焼く。** three の標準マテリアルは環境光のかなりの部分を
+`scene.environment` から取る。これが無いとガラスは映すものを持たず、移植した
+建物は真昼でも黒い段ボールになる（実際そうなった）。
+
+**仕上げの一段**は環境遮蔽・ブルーム・色調整・SMAA。壁と地面が出会う角に影が
+溜まって初めて、物が「置かれている」ように見える。30fps を保てない環境では
+自分から降りる。
+
+**地面**は標高で草の質を変え、乾湿のまだらを乗せ、乾いた所は土を透かし、
+急斜面で岩を出す。まだらは世界座標のノイズなので、メッシュの割り方に依存しない。
+**路面**にも同じ考えでざらつきと打ち継ぎを入れ、あわせて間接鏡面を落とす
+(環境マップは遮蔽を持たないので、街路の路面が空を丸ごと映して壁より明るくなる)。
+
+**建物**は用途ごとのレシピで基壇・セットバック・塔屋・屋上設備・庇・店構え・看板を
+積む。窓・バルコニー・シャッターは**壁のローカル座標からシェーダが描く**ので、
+何棟建ってもドローコールは部品の種類数のまま増えず、拡大しても窓が伸びない。
+移植元の街路は格子で建物は軸に平行だったが、こちらの敷地は道に沿って任意の角度を
+向くので、部品を置く最後の 1 か所でまとめて回している。
+
+**夜**は窓が部屋ごとに点いていき、街灯が道に光だまりを落とす。点光源は置かない
+（数百個の代金に見合わないし、目が読んでいるのは路面の光だまりのほうだ）。
+
+**接地影**は車と人の足元に敷く板。影マップは 1 テクセル 10cm あり、自己遮蔽避けの
+押し出しもあるので、足元の数十 cm は構造的に必ず抜ける。そこが抜けていると物は浮く。
+
 ## 構成（3D版）
 
 ```
@@ -121,6 +161,13 @@ src/
                      build/    建物・地面・小物のメッシュ
                      render/   worldBuilder（ネットワーク → 世界の再構築）, materials
                      app/      buildTool（敷設 UX）, viewport, sketch（経由点から引く）
+  look/              移植した描画ライブラリ（repo: kamocyc/claude-web-test-21）。
+                     sky（大気とドーム）, postfx（環境遮蔽・ブルーム・色調整・SMAA）,
+                     groundPalette / surfaceNoise（地面と路面の質感）,
+                     buildingParts / buildingShapes / style（建物の部品とレシピ）,
+                     roofTexture（瓦）, vegetation（樹木）, pedestrianParts（人）,
+                     agentMaterial（ガラスと夜の持ち上げ）, groundShadow（接地影）,
+                     instancePool, season
   city/              この街そのもの。engine の上に載っている層。
                      world（ネットワーク + 地形 + 導出）, terrain（水面・資源）,
                      scenario（開始時の町）, routing（車線グラフ上の経路探索）,
@@ -128,7 +175,10 @@ src/
                      transit（駅まで歩く・待つ・乗る・降りる）,
                      civic（街が自分で建てるもの）, civicView（その 3D 表示）,
                      economy（財政）, simulation（成長・雇用・幸福度・人口移動）,
-                     persistence（セーブ）, plan（平面表示）, hud, app, main
+                     persistence（セーブ）, plan（平面表示）,
+                     buildingView / civicView（建物の描画）, nature（植生）,
+                     water（水面）, streetLights（街灯）, contactShadows,
+                     pedestrians, hud, app, main
   core/ world/ sim/ render/ ui/
                      タイル版（`classic.html`）。3D版は core/types・core/rng と
                      world/buildings（性能表）、ui/window・ui/widgets を共有している。
