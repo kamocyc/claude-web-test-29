@@ -1,13 +1,14 @@
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
-  // Two pages during the port: the tile city that is being replaced, and the
-  // city on the alignment engine that replaces it.
+  // The game is the city on the alignment engine. The tile city it grew out
+  // of is kept as a second page rather than deleted: it is a different game
+  // -- a grid, one view, no terrain -- and it still works.
   build: {
     rollupOptions: {
       input: {
         main: 'index.html',
-        city: 'city.html',
+        classic: 'classic.html',
       },
     },
   },
