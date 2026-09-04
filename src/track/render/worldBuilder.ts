@@ -84,7 +84,7 @@ import { buildLaneGraph, signalPhaseOf, type LaneGraph } from '../sim/lanegraph'
 import { planLines, type LinePlan } from '../sim/lineRoute';
 import { signalStateAt } from '../sim/signals';
 import { Traffic } from '../sim/traffic';
-import { VehicleView } from './vehicles';
+import { VehicleView } from './vehicleView';
 import { buildConnectivity, type Connectivity } from '../network/connectivity';
 import { Occupancy } from '../network/occupancy';
 import {
@@ -311,9 +311,14 @@ export class WorldBuilder {
   laneGraph: LaneGraph = { lanes: [], spawnable: [] };
   /** 車両のシミュレーション。 */
   readonly traffic = new Traffic(this.laneGraph);
-  private readonly vehicleView = new VehicleView();
+  readonly vehicleView = new VehicleView();
   /** 車両を走らせるか。 */
   showVehicles = true;
+  /**
+   * いま見ている場所。遠くの車両の灯りを省くのに使う (移植先で足した)。
+   * 未設定なら距離で省かない。
+   */
+  viewFrom: Vector3 | undefined = undefined;
   /**
    * 沿道に塗った用途。
    *
@@ -2153,7 +2158,7 @@ export class WorldBuilder {
     // 信号の現示は描画側と同じ時刻・同じ関数で見るので、青なのに止まった
     // ままになることがない。
     this.traffic.step(dt, time);
-    this.vehicleView.sync(this.traffic.vehicles, this.highlightVehicle);
+    this.vehicleView.sync(this.traffic.vehicles, this.highlightVehicle, this.viewFrom);
   }
 }
 

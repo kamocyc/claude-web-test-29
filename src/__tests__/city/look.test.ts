@@ -5,6 +5,7 @@ import { Season, seasonOnDay } from '../../look/season';
 import { BuildingView } from '../../city/buildingView';
 import { NatureLayer } from '../../city/nature';
 import { StreetLights } from '../../city/streetLights';
+import { VehicleView } from '../../track/render/vehicleView';
 import { seedStartingTown } from '../../city/scenario';
 import { CitySimulation, SPEEDS } from '../../city/simulation';
 import { CityWorld } from '../../city/world';
@@ -125,5 +126,48 @@ describe('the layers that draw the city', () => {
     expect(lamps.group.visible).toBe(false);
     lamps.setNight(atmosphereAt(0).nightAmount);
     expect(lamps.group.visible).toBe(true);
+  });
+
+  it('gives every vehicle a shape, and a face to the ends of a train', () => {
+    const { world } = town(30);
+    const view = new VehicleView();
+
+    const cars = world.traffic.vehicles.filter((v) => v.kind === 'car');
+    const trains = world.traffic.vehicles.filter((v) => v.kind === 'train');
+    expect(cars.length).toBeGreaterThan(0);
+    expect(trains.length).toBeGreaterThan(0);
+
+    view.setAtmosphere(atmosphereAt(0.5));
+    view.sync(world.traffic.vehicles);
+
+    const meshes = view.group.children as InstancedMesh[];
+    const drawn = meshes.reduce((n, m) => n + m.count, 0);
+    const bodies = world.traffic.vehicles.reduce((n, v) => n + v.bodies.length, 0);
+    // One body apiece; the lamps and the light on the road are off at noon.
+    expect(drawn).toBe(bodies);
+
+    // A three-car train is a front, a middle and a back -- three different
+    // shapes -- not the same carriage three times.
+    const consist = trains.find((t) => t.cars >= 3);
+    if (consist) {
+      const used = meshes.filter((m) => m.count > 0).length;
+      expect(used).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  it('lights the cars after dark and not before', () => {
+    const { world } = town(30);
+    const view = new VehicleView();
+    const count = (): number =>
+      (view.group.children as InstancedMesh[]).reduce((n, m) => n + m.count, 0);
+
+    view.setAtmosphere(atmosphereAt(0.5));
+    view.sync(world.traffic.vehicles);
+    const byDay = count();
+
+    view.setAtmosphere(atmosphereAt(0));
+    view.sync(world.traffic.vehicles);
+    // Lamps, and a patch of light on the road for whatever is in front.
+    expect(count()).toBeGreaterThan(byDay);
   });
 });

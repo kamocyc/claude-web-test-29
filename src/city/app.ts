@@ -331,6 +331,10 @@ export class CityApp {
     );
     this.pedestrians.update(this.world, this.sim.citizens, this.viewport.controls.target);
     this.pedestrians.setAtmosphere(this.viewport.atmosphere);
+    // The cars' glass reflects the same sky, and their lamps come on from the
+    // same night figure as the street lighting and the windows.
+    this.world.builder.vehicleView.setAtmosphere(this.viewport.atmosphere);
+    this.world.builder.viewFrom = this.viewport.controls.target;
     this.clock = this.world.traffic.time;
     // The sky is the city's own clock. Nothing else in the scene knows what
     // time it is, so the light, the fog, the exposure and the colour grade all

@@ -56,7 +56,11 @@ export class ContactShadows {
           pose.pos.x,
           // Just above the road. On it, and the two surfaces fight over which
           // is in front, which flickers as the camera moves.
-          pose.pos.y - vehicle.size.height * 0.5 + 0.04,
+          //
+          // A body pose sits *on* the road -- it comes straight from the lane
+          // path -- so there is no half-height to take off. Taking one off
+          // buried every shadow seventy centimetres under the tarmac.
+          pose.pos.y + 0.04,
           pose.pos.z,
           Math.atan2(pose.dir.x, pose.dir.z),
           vehicle.size.width * 1.15,
