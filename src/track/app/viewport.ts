@@ -1,16 +1,14 @@
 import {
   ACESFilmicToneMapping,
-  AmbientLight,
-  BackSide,
   Color,
   DirectionalLight,
+  Fog,
+  HemisphereLight,
   Mesh,
   PerspectiveCamera,
-  PCFShadowMap,
+  PCFSoftShadowMap,
   Raycaster,
   Scene,
-  ShaderMaterial,
-  SphereGeometry,
   SRGBColorSpace,
   Vector2,
   Vector3,
@@ -18,6 +16,8 @@ import {
 } from 'three';
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js';
 import { VIEW_DISTANCE } from '../core/units';
+import { atmosphereAt, SkyDome, sunDirection, type Atmosphere } from '../../look/sky';
+import { PostFx } from '../../look/postfx';
 
 /**
  * 一人称視点のときの近クリップ面 [m]。
@@ -37,8 +37,17 @@ export class Viewport {
   readonly camera: PerspectiveCamera;
   readonly controls: MapControls;
   private readonly sun: DirectionalLight;
+  /** 空からの回り込みと地面からの照り返し。時刻で色が変わる。 */
+  private readonly hemi: HemisphereLight;
   /** 空のドーム。視点を包んだままにするので、いつも同じ空が見える。 */
-  private readonly sky: Mesh;
+  readonly sky = new SkyDome(VIEW_DISTANCE * 1.5);
+  /** 仕上げの一段。重い環境では自分で降りる。 */
+  readonly fx: PostFx;
+  /** いまの大気。時刻から連続で作る。 */
+  readonly atmosphere: Atmosphere = atmosphereAt(0.5);
+  private readonly sunDir = new Vector3(0, 1, 0);
+  private elapsed = 0;
+  private lastFrameAt = performance.now();
   private readonly raycaster = new Raycaster();
   private readonly pointer = new Vector2();
   /** 一人称視点に入る前の視点。降りたときに戻す。 */
@@ -53,10 +62,12 @@ export class Viewport {
     this.renderer.toneMapping = ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 0.98;
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = PCFShadowMap;
+    this.renderer.shadowMap.type = PCFSoftShadowMap;
 
+    // 遠景は地平の色に溶かす。空とフォグと環境光が同じ 1 組の値から来る
+    // ので、時刻が変わっても three つが食い違わない。
+    this.scene.fog = new Fog(0xcadbe8, VIEW_DISTANCE * 0.45, VIEW_DISTANCE * 1.35);
     this.scene.background = new Color(0x9fc4e0);
-    // 遠景は霞ませない。地形の色と地図としての見通しをそのまま出す。
     this.camera = new PerspectiveCamera(52, 1, 1, VIEW_DISTANCE * 1.6);
     this.camera.position.set(150, 180, 220);
 
@@ -70,7 +81,8 @@ export class Viewport {
     this.controls.maxPolarAngle = Math.PI * 0.49;
     this.controls.target.set(0, 0, 0);
 
-    this.scene.add(new AmbientLight(0xbcd0e6, 0.5));
+    this.hemi = new HemisphereLight(0xbcd0e6, 0x6f6a58, 0.85);
+    this.scene.add(this.hemi);
 
     this.sun = new DirectionalLight(0xfff2df, 1.55);
     this.sun.position.set(-160, 240, 120);
@@ -88,11 +100,52 @@ export class Viewport {
     this.scene.add(this.sun);
     this.scene.add(this.sun.target);
 
-    this.sky = createSky();
-    this.scene.add(this.sky);
+    this.scene.add(this.sky.mesh);
+    this.fx = new PostFx(this.renderer, this.scene, this.camera);
 
     window.addEventListener('resize', () => this.resize());
     this.resize();
+    this.setTimeOfDay(0.5);
+  }
+
+  /**
+   * Put the world at a time of day (0 = midnight, 0.5 = noon).
+   *
+   * One call sets the sky, the sun, the ambient, the fog and the exposure,
+   * because they all come out of the same atmosphere. Setting them
+   * separately is how a scene ends up with a sunset sky over midday
+   * lighting -- which reads as a bug even when nobody can say why.
+   */
+  setTimeOfDay(dayFraction: number): void {
+    const atmo = atmosphereAt(dayFraction, this.atmosphere);
+    sunDirection(dayFraction, this.sunDir);
+
+    this.sun.color.copy(atmo.sunColor);
+    this.sun.intensity = atmo.sunIntensity;
+    this.hemi.color.copy(atmo.skyLight);
+    this.hemi.groundColor.copy(atmo.groundLight);
+    this.hemi.intensity = atmo.ambientIntensity;
+    this.renderer.toneMappingExposure = atmo.exposure;
+    (this.scene.fog as Fog).color.copy(atmo.horizon);
+    (this.scene.background as Color).copy(atmo.horizon);
+    // A small lean in the grade, the way the light already leans: warm in the
+    // late afternoon, cool at dawn and through the night. (The first attempt
+    // had this inverted -- a cool noon and a warm midnight -- which made the
+    // whole day read wrong without it being obvious why.)
+    const hour = dayFraction * 24;
+    const warmth = hour > 15 && hour < 20
+      ? 0.9
+      : hour > 5 && hour < 8
+        ? -0.55
+        : hour < 5 || hour >= 20
+          ? -0.7
+          : 0.1;
+    this.fx.setMood(atmo.nightAmount, warmth);
+  }
+
+  /** How dark it is now, 0..1. Anything that lights up at night reads this. */
+  get nightAmount(): number {
+    return this.atmosphere.nightAmount;
   }
 
   resize(): void {
@@ -101,12 +154,18 @@ export class Viewport {
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
+    this.fx?.setSize(width * this.renderer.getPixelRatio(), height * this.renderer.getPixelRatio());
   }
 
   /** 影のカメラを注視点に追従させ、広いマップでも影の解像度を保つ。 */
   private updateShadowCamera(): void {
     const t = this.controls.target;
-    this.sun.position.set(t.x - 160, t.y + 240, t.z + 120);
+    // 光の向きは時刻から来る。影が朝は長く西へ、夕は長く東へ伸びる。
+    this.sun.position.set(
+      t.x + this.sunDir.x * 320,
+      t.y + Math.max(40, this.sunDir.y * 320),
+      t.z + this.sunDir.z * 320,
+    );
     this.sun.target.position.copy(t);
     this.sun.target.updateMatrixWorld();
   }
@@ -228,10 +287,16 @@ export class Viewport {
     }
     // 空は視点に付いて回る。置いたままにすると、引いたときにドームの縁が
     // 空の中に見えてしまう。
-    this.sky.position.copy(this.camera.position);
+    this.elapsed = performance.now() / 1000;
+    this.sky.update(this.atmosphere, this.sunDir, this.camera.position, this.elapsed);
     this.updateShadowCamera();
-    this.renderer.render(this.scene, this.camera);
+    this.fx.setAoScale(this.viewDistance);
+    const now = performance.now();
+    this.fx.render(this.scene, this.camera, now - this.lastFrameAt);
+    this.lastFrameAt = now;
   }
+
+
 
   /** 画面座標 (CSS ピクセル) を正規化デバイス座標に変換して保持する。 */
   setPointer(clientX: number, clientY: number): void {
@@ -284,39 +349,3 @@ export function screenPanDelta(ahead: Vector3, forward: number, right: number): 
 }
 
 /** 天頂から地平にかけて色が変わる簡単な空。視点を中心に置いて使う。 */
-function createSky(): Mesh {
-  const geometry = new SphereGeometry(VIEW_DISTANCE * 1.5, 24, 16);
-  const material = new ShaderMaterial({
-    side: BackSide,
-    depthWrite: false,
-    uniforms: {
-      topColor: { value: new Color(0x4f86c6) },
-      middleColor: { value: new Color(0xa9cbe6) },
-      bottomColor: { value: new Color(0xd8e2e6) },
-    },
-    vertexShader: `
-      varying vec3 vPos;
-      void main() {
-        vPos = position;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-      }
-    `,
-    fragmentShader: `
-      uniform vec3 topColor;
-      uniform vec3 middleColor;
-      uniform vec3 bottomColor;
-      varying vec3 vPos;
-      void main() {
-        float h = normalize(vPos).y;
-        vec3 c = h > 0.0
-          ? mix(middleColor, topColor, smoothstep(0.0, 0.6, h))
-          : mix(middleColor, bottomColor, smoothstep(0.0, -0.25, h));
-        gl_FragColor = vec4(c, 1.0);
-      }
-    `,
-  });
-  const mesh = new Mesh(geometry, material);
-  mesh.name = 'sky';
-  mesh.frustumCulled = false;
-  return mesh;
-}

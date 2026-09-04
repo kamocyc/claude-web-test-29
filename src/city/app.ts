@@ -279,6 +279,11 @@ export class CityApp {
     // once when nothing has changed, which is almost every frame.
     this.civicView.update(this.sim.buildings, this.world.field);
     this.clock = this.world.traffic.time;
+    // The sky is the city's own clock. Nothing else in the scene knows what
+    // time it is, so the light, the fog, the exposure and the colour grade all
+    // come from this one call -- and a sunset sky can never end up over midday
+    // lighting.
+    this.viewport.setTimeOfDay(this.sim.minuteOfDay / 1440);
     this.world.builder.animate(this.clock, 0);
 
     if (now > this.focusUntil) this.focus = null;
