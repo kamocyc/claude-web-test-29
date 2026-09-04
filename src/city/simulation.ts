@@ -22,9 +22,10 @@ import {
   WALK_SPEED,
   type CityCitizen,
 } from './citizens';
-import { Treasury } from './economy';
+import { Treasury, type TreasurySave } from './economy';
 import { findLaneRoute, laneStopsNear, type LaneRoute } from './routing';
 import type { LineId } from '../track/network/line';
+import type { ZoneType } from '../track/network/zoning';
 import {
   capacityOf,
   isBoardable,
@@ -123,6 +124,46 @@ export interface CityStats {
   stranded: number;
   meanCommute: number;
   happiness: number;
+}
+
+
+/** A saved city, as plain data. */
+export interface SimSave {
+  minutes: number;
+  transitTrips: number;
+  nextCitizenSeed: number;
+  lastSettledDay: number;
+  carOwnership: number;
+  rngState: number;
+  treasury: TreasurySave;
+  buildings: Array<{
+    id: number;
+    type: BuildingType;
+    zone: ZoneType;
+    at: [number, number, number];
+    access: { segment: number } | null;
+    capacity: number;
+    occupants: number[];
+    alive: boolean;
+    powered: boolean;
+    rawStock: number;
+    goodsStock: number;
+    soldToday: number;
+    starvedHours: number;
+    visitsToday: number;
+  }>;
+  citizens: Array<{
+    id: number;
+    seed: number;
+    name: string;
+    age: number;
+    home: number;
+    work: number;
+    hasCar: boolean;
+    happiness: number;
+    unhappyHours: number;
+    lastTripMinutes: number;
+  }>;
 }
 
 export class CitySimulation {
@@ -857,6 +898,131 @@ export class CitySimulation {
     let total = 0;
     for (const b of this.buildings) if (b.alive && isWorkplace(b)) total += b.capacity;
     return total;
+  }
+
+  // ------------------------------------------------------------- saving
+
+  /**
+   * Everything about the city that is not derivable from the world.
+   *
+   * Deliberately small. The terrain comes back from its seed, the plots and
+   * the lane graph are rebuilt from the network, and a trip in progress is not
+   * saved at all -- a loaded city starts with everybody at home or at work,
+   * because half a journey through a lane graph that has yet to be built is
+   * not a position anybody can be restored to. The generator's stream position
+   * *is* saved: without it a loaded city replays the draws the save already
+   * made, and grows the same buildings again.
+   */
+  capture(): SimSave {
+    return {
+      minutes: this.minutes,
+      transitTrips: this.transitTrips,
+      nextCitizenSeed: this.nextCitizenSeed,
+      lastSettledDay: this.lastSettledDay,
+      carOwnership: this.carOwnership,
+      rngState: this.rng.getState(),
+      treasury: this.treasury.capture(),
+      buildings: this.buildings.map((b) => ({
+        id: b.id,
+        type: b.type,
+        zone: b.zone,
+        at: [b.at.x, b.at.y, b.at.z] as [number, number, number],
+        access: b.access ? { segment: b.access.segment } : null,
+        capacity: b.capacity,
+        occupants: [...b.occupants],
+        alive: b.alive,
+        powered: b.powered,
+        rawStock: b.rawStock,
+        goodsStock: b.goodsStock,
+        soldToday: b.soldToday,
+        starvedHours: b.starvedHours,
+        visitsToday: b.visitsToday,
+      })),
+      citizens: this.citizens.map((c) => ({
+        id: c.id,
+        seed: c.seed,
+        name: c.name,
+        age: c.age,
+        home: c.home,
+        work: c.work,
+        hasCar: c.hasCar,
+        happiness: c.happiness,
+        unhappyHours: c.unhappyHours,
+        lastTripMinutes: c.lastTripMinutes,
+      })),
+    };
+  }
+
+  /** Become the saved city. The world must already be the saved world. */
+  adopt(save: SimSave): void {
+    this.minutes = save.minutes;
+    this.transitTrips = save.transitTrips;
+    this.nextCitizenSeed = save.nextCitizenSeed;
+    this.lastSettledDay = save.lastSettledDay;
+    this.carOwnership = save.carOwnership;
+    this.rng.setState(save.rngState);
+    this.treasury.adopt(save.treasury);
+
+    this.buildings.length = 0;
+    for (const b of save.buildings) {
+      const at = new Vector3(b.at[0], b.at[1], b.at[2]);
+      this.buildings.push({
+        id: b.id,
+        type: b.type,
+        zone: b.zone,
+        at,
+        lot: -1,
+        access: b.access ? { segment: b.access.segment, at: at.clone() } : null,
+        capacity: b.capacity,
+        occupants: [...b.occupants],
+        alive: b.alive,
+        powered: b.powered,
+        rawStock: b.rawStock,
+        goodsStock: b.goodsStock,
+        soldToday: b.soldToday,
+        starvedHours: b.starvedHours,
+        visitsToday: b.visitsToday,
+      });
+    }
+
+    this.citizens.length = 0;
+    for (const c of save.citizens) {
+      const home = this.buildings[c.home];
+      const citizen = createCitizen(
+        c.id,
+        c.seed,
+        c.home,
+        home?.at ?? new Vector3(),
+        this.rng,
+        this.carOwnership,
+      );
+      citizen.name = c.name;
+      citizen.age = c.age;
+      citizen.work = c.work;
+      citizen.hasCar = c.hasCar;
+      citizen.happiness = c.happiness;
+      citizen.unhappyHours = c.unhappyHours;
+      citizen.lastTripMinutes = c.lastTripMinutes;
+      this.citizens.push(citizen);
+    }
+    // `createCitizen` draws from the generator, so put the stream back where
+    // the save left it -- restoring a city must not consume its future.
+    this.rng.setState(save.rngState);
+
+    this.pending.length = 0;
+    this.riders.clear();
+    this.lastGrowth = -1;
+    this.lastMigration = -1;
+    this.lastWellbeing = -1;
+    // The town it starts with is the town it saved, not a purchase: the first
+    // charge only records the watermark, and the watermark itself came back
+    // with the treasury.
+    this.charged = false;
+    // Match the buildings to their plots now rather than at the first step, so
+    // a loaded city is a whole city before anybody looks at it.
+    this.onWorldChanged();
+    this.lastWorldRevision = this.world.revision;
+    this.sample();
   }
 
   /**

@@ -235,6 +235,17 @@ export class ZoneMap {
   clear(): void {
     this.cells.clear();
   }
+
+  /** 塗ったマスをそのまま書き出す (移植先で足した)。 */
+  toState(): Array<[number, ZoneType]> {
+    return [...this.cells.entries()];
+  }
+
+  /** 書き出した姿に戻す (移植先で足した)。 */
+  restore(state: ReadonlyArray<readonly [number, ZoneType]>): void {
+    this.cells.clear();
+    for (const [key, zone] of state) this.cells.set(key, zone);
+  }
 }
 
 function cellKey(x: number, z: number): number {

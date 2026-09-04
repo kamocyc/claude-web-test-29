@@ -70,4 +70,33 @@ export class Treasury {
   get inOverdraft(): boolean {
     return this.balance < 0;
   }
+
+  capture(): TreasurySave {
+    return {
+      balance: this.balance,
+      spent: this.spent,
+      lastDay: { ...this.lastDay },
+      lastNetworkCost: this.lastNetworkCost,
+    };
+  }
+
+  adopt(save: TreasurySave): void {
+    this.balance = save.balance;
+    this.spent = save.spent;
+    this.lastDay = { ...save.lastDay };
+    this.lastNetworkCost = save.lastNetworkCost;
+  }
+}
+
+export interface TreasurySave {
+  balance: number;
+  spent: number;
+  lastDay: DayResult;
+  /**
+   * The network-cost figure the books were last squared against.
+   *
+   * Saved because it is a *watermark*, not a total: without it a loaded city
+   * would be charged all over again for every road it had ever laid.
+   */
+  lastNetworkCost: number;
 }

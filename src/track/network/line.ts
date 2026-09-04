@@ -114,6 +114,23 @@ export class LineMap {
     return changed;
   }
 
+  /** 路線をそのまま書き出す (移植先で足した)。 */
+  toState(): { nextId: LineId; lines: TransitLine[] } {
+    return {
+      nextId: this.nextId,
+      lines: this.all.map((line) => ({ ...line, stops: [...line.stops], color: [...line.color] as RGB })),
+    };
+  }
+
+  /** 書き出した姿に戻す (移植先で足した)。 */
+  restore(state: { nextId: LineId; lines: TransitLine[] }): void {
+    this.byId.clear();
+    this.nextId = state.nextId;
+    for (const line of state.lines) {
+      this.byId.set(line.id, { ...line, stops: [...line.stops], color: [...line.color] as RGB });
+    }
+  }
+
   private nextName(): string {
     const used = new Set([...this.byId.values()].map((line) => line.name));
     let index = this.byId.size + 1;

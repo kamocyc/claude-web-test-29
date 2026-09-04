@@ -28,6 +28,9 @@ export interface HudCallbacks {
   onView(view: ViewMode): void;
   onPanel(panel: PanelId): void;
   onStationRotate(steps: number): void;
+  onSave(): void;
+  onLoad(): void;
+  onNew(): void;
 }
 
 export type PanelId = 'warnings' | 'stats' | 'lines' | 'help';
@@ -127,6 +130,13 @@ export class Hud {
       this.viewButtons.set(view, b);
     }
 
+    const saves = group('街');
+    saves.body.append(
+      textButton('保存', 'この街を保存する (Ctrl+S)', () => this.cb.onSave()),
+      textButton('読込', '保存した街を開く', () => this.cb.onLoad()),
+      textButton('新規', '新しい街を始める', () => this.cb.onNew()),
+    );
+
     const windows = group('ウィンドウ');
     windows.body.append(
       textButton('警告', '警告の一覧', () => this.cb.onPanel('warnings')),
@@ -136,7 +146,8 @@ export class Hud {
     );
 
     row.append(
-      modes.root, roads.root, rails.root, zones.root, height.root, views.root, windows.root,
+      modes.root, roads.root, rails.root, zones.root, height.root, views.root,
+      saves.root, windows.root,
     );
     bottom.append(this.captionEl, row);
 

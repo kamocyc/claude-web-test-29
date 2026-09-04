@@ -4,6 +4,7 @@ import { Viewport } from '../track/app/viewport';
 import { SnapView } from '../track/render/snapView';
 import { NETWORK_CLASSES } from '../track/network/classes';
 import { ZONE_LABELS, ZONE_TYPES, type ZoneType } from '../track/network/zoning';
+import { applyCity, captureCity, writeSave, type CitySave } from './persistence';
 import { PlanView } from './plan';
 import { seedStartingTown } from './scenario';
 import { CitySimulation } from './simulation';
@@ -29,6 +30,13 @@ export interface CityAppOptions {
   /** The plan-view canvas. */
   canvas2d: HTMLCanvasElement;
   seed?: number;
+  /**
+   * A city to open instead of a new one.
+   *
+   * Its seed decides the ground, so it is handed in at construction rather
+   * than poured into a world that has already generated different terrain.
+   */
+  save?: CitySave;
 }
 
 export class CityApp {
@@ -77,12 +85,44 @@ export class CityApp {
     );
     this.viewport.scene.add(this.tool.previewGroup);
 
-    // The town picks its own site on the generated ground, so the camera has
-    // to be told where it ended up rather than assuming the origin.
-    this.centre = seedStartingTown(this.world);
-    this.world.rebuild();
+    if (options.save) {
+      applyCity(this.world, this.sim, options.save);
+      this.centre = centreOf(this.world);
+    } else {
+      // The town picks its own site on the generated ground, so the camera has
+      // to be told where it ended up rather than assuming the origin.
+      this.centre = seedStartingTown(this.world);
+      this.world.rebuild();
+    }
     this.plan.centerOn(this.centre.x, this.centre.z);
     this.lookAt(this.centre.x, this.centre.z, 520);
+  }
+
+  // ----------------------------------------------------------------- saving
+
+  /** Write the city to the browser. Returns what was written. */
+  save(): CitySave {
+    const save = captureCity(this.world, this.sim);
+    writeSave(save);
+    return save;
+  }
+
+  /**
+   * Open a saved city in place.
+   *
+   * Only possible when the save came from this world's own seed: the ground is
+   * generated once, at construction, so a save of different terrain has to be
+   * opened by starting again rather than by swapping the hills underneath a
+   * running city. The caller is told which happened.
+   */
+  load(save: CitySave): boolean {
+    if (save.seed !== this.world.seed) return false;
+    applyCity(this.world, this.sim, save);
+    this.tool.cancel();
+    this.world.traffic.reset(this.world.laneGraph);
+    this.world.traffic.setLines(this.world.builder.linePlans);
+    this.showPlace(centreOf(this.world));
+    return true;
   }
 
   // ------------------------------------------------------------------ views
@@ -228,3 +268,14 @@ export const BUILD_CLASSES = NETWORK_CLASSES.map((cls) => ({
 
 /** The uses the zone tool offers. */
 export const ZONE_CHOICES = ZONE_TYPES.map((zone) => ({ zone, label: ZONE_LABELS[zone] }));
+
+/** The middle of whatever has been built, for pointing the camera at it. */
+function centreOf(world: CityWorld): Vector3 {
+  const centre = new Vector3();
+  let count = 0;
+  for (const node of world.net.nodes.values()) {
+    centre.add(node.pos);
+    count++;
+  }
+  return count === 0 ? centre : centre.multiplyScalar(1 / count);
+}

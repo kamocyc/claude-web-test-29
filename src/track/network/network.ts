@@ -8,7 +8,10 @@ import {
   validateStationSpec,
   type Station,
   type StationId,
+  type StationLength,
+  type StationPlatform,
   type StationSpec,
+  type StationTrack,
 } from './station';
 
 export type NodeId = number;
@@ -76,6 +79,47 @@ export interface Branch {
  * 幾何 (線形) はノード位置と制御点から都度導出する。編集のたびに
  * `version` が上がり、描画側はそれを見て再構築する。
  */
+
+/**
+ * 保存用の生の状態 (移植先で足した)。
+ *
+ * 手順を記録するのではなく、そのままの姿を書き出す。駅の構内線のように
+ * 「別の呼び出しが作った」ものも id ごと戻さないと、建物が覚えている
+ * セグメント番号も路線の停車駅もすべて指す先を失うため。
+ */
+export interface NetworkState {
+  nextNodeId: number;
+  nextSegmentId: number;
+  nextStationId: number;
+  nodes: Array<{ id: NodeId; pos: [number, number, number]; segments: SegmentId[] }>;
+  segments: Array<{
+    id: SegmentId;
+    classId: string;
+    a: NodeId;
+    b: NodeId;
+    ctrlA: [number, number];
+    ctrlB: [number, number];
+    via?: [number, number][];
+    gradeA: number;
+    gradeB: number;
+    stationTrack?: { station: StationId; index: number };
+  }>;
+  stations: Array<{
+    id: StationId;
+    name: string;
+    center: [number, number, number];
+    heading: number;
+    length: StationLength;
+    trackCount: number;
+    platformCount: number;
+    elevated: boolean;
+    tracks: StationTrack[];
+    platforms: StationPlatform[];
+    minOffset: number;
+    maxOffset: number;
+  }>;
+}
+
 export class Network {
   private nextNodeId = 1;
   private nextSegmentId = 1;
@@ -89,6 +133,94 @@ export class Network {
   private touch(): void {
     this.version++;
     this.alignmentCache.clear();
+  }
+
+  /** そのままの姿を書き出す (移植先で足した)。 */
+  toState(): NetworkState {
+    return {
+      nextNodeId: this.nextNodeId,
+      nextSegmentId: this.nextSegmentId,
+      nextStationId: this.nextStationId,
+      nodes: [...this.nodes.values()].map((n) => ({
+        id: n.id,
+        pos: [n.pos.x, n.pos.y, n.pos.z] as [number, number, number],
+        segments: [...n.segments],
+      })),
+      segments: [...this.segments.values()].map((s) => ({
+        id: s.id,
+        classId: s.classId,
+        a: s.a,
+        b: s.b,
+        ctrlA: [s.ctrlA.x, s.ctrlA.y] as [number, number],
+        ctrlB: [s.ctrlB.x, s.ctrlB.y] as [number, number],
+        ...(s.via ? { via: s.via.map((v) => [v.x, v.y] as [number, number]) } : {}),
+        gradeA: s.gradeA,
+        gradeB: s.gradeB,
+        ...(s.stationTrack ? { stationTrack: { ...s.stationTrack } } : {}),
+      })),
+      stations: [...this.stations.values()].map((st) => ({
+        id: st.id,
+        name: st.name,
+        center: [st.center.x, st.center.y, st.center.z] as [number, number, number],
+        heading: st.heading,
+        length: st.length,
+        trackCount: st.trackCount,
+        platformCount: st.platformCount,
+        elevated: st.elevated,
+        tracks: st.tracks.map((t) => ({ ...t })),
+        platforms: st.platforms.map((pl) => ({ ...pl, tracks: [...pl.tracks] })),
+        minOffset: st.minOffset,
+        maxOffset: st.maxOffset,
+      })),
+    };
+  }
+
+  /** 書き出した姿に戻す (移植先で足した)。今の内容は捨てる。 */
+  restore(state: NetworkState): void {
+    this.nodes.clear();
+    this.segments.clear();
+    this.stations.clear();
+    this.nextNodeId = state.nextNodeId;
+    this.nextSegmentId = state.nextSegmentId;
+    this.nextStationId = state.nextStationId;
+    for (const n of state.nodes) {
+      this.nodes.set(n.id, {
+        id: n.id,
+        pos: new Vector3(n.pos[0], n.pos[1], n.pos[2]),
+        segments: [...n.segments],
+      });
+    }
+    for (const s of state.segments) {
+      this.segments.set(s.id, {
+        id: s.id,
+        classId: s.classId,
+        a: s.a,
+        b: s.b,
+        ctrlA: new Vector2(s.ctrlA[0], s.ctrlA[1]),
+        ctrlB: new Vector2(s.ctrlB[0], s.ctrlB[1]),
+        ...(s.via ? { via: s.via.map((v) => new Vector2(v[0], v[1])) } : {}),
+        gradeA: s.gradeA,
+        gradeB: s.gradeB,
+        ...(s.stationTrack ? { stationTrack: { ...s.stationTrack } } : {}),
+      });
+    }
+    for (const st of state.stations) {
+      this.stations.set(st.id, {
+        id: st.id,
+        name: st.name,
+        center: new Vector3(st.center[0], st.center[1], st.center[2]),
+        heading: st.heading,
+        length: st.length,
+        trackCount: st.trackCount,
+        platformCount: st.platformCount,
+        elevated: st.elevated,
+        tracks: st.tracks.map((t) => ({ ...t })),
+        platforms: st.platforms.map((pl) => ({ ...pl, tracks: [...pl.tracks] })),
+        minOffset: st.minOffset,
+        maxOffset: st.maxOffset,
+      });
+    }
+    this.touch();
   }
 
   addNode(pos: Vector3): NetNode {

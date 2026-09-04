@@ -4,6 +4,8 @@ import { InfoWindow } from '../ui/window';
 import { button, note, row, section } from '../ui/widgets';
 import { CityApp } from './app';
 import { Hud, type PanelId } from './hud';
+import { clearSave, readSave } from './persistence';
+import { DEFAULT_SPEED } from './simulation';
 
 /**
  * The city, wired up.
@@ -21,7 +23,10 @@ const topbar = document.getElementById('topbar')!;
 const toolbar = document.getElementById('toolbar')!;
 const windowLayer = document.getElementById('windows')!;
 
-const app = new CityApp({ canvas3d, canvas2d });
+// A saved city decides the ground, so it has to be found before the world is
+// built rather than poured into one that has already generated other terrain.
+const opening = readSave();
+const app = new CityApp({ canvas3d, canvas2d, seed: opening?.seed, save: opening ?? undefined });
 
 // ------------------------------------------------------------------ windows
 
@@ -53,6 +58,9 @@ const hud = new Hud(topbar, toolbar, {
   onView: (view) => app.setView(view),
   onPanel: (panel) => windows[panel].toggle(),
   onStationRotate: (steps) => app.tool.rotateStation(steps),
+  onSave: () => saveNow(true),
+  onLoad: () => loadNow(),
+  onNew: () => startOver(),
 });
 
 /** A short message over the toolbar, for a refusal the player needs to see. */
@@ -62,6 +70,61 @@ function say(message: string): void {
   notice = message;
   noticeUntil = performance.now() + 4000;
 }
+
+// -------------------------------------------------------------------- saving
+
+/**
+ * Set when the page is being reloaded on purpose (a new city, or opening a
+ * save of different ground).
+ *
+ * Without it the autosave below fires as the page goes away and writes the
+ * city being abandoned straight back over the one being opened -- which is
+ * exactly what "new city" did the first time it was tried.
+ */
+let leaving = false;
+
+function saveNow(announce = false): void {
+  if (leaving) return;
+  try {
+    app.save();
+    if (announce) say('保存しました');
+  } catch {
+    // A browser with storage turned off, or a save too big for the quota.
+    // Losing the save is bad; losing the city that is running is worse.
+    say('保存できませんでした');
+  }
+}
+
+function loadNow(): void {
+  const save = readSave();
+  if (!save) {
+    say('セーブがありません');
+    return;
+  }
+  // A save of different ground cannot be opened in place -- the terrain is
+  // generated once, when the world is built -- so start the page again and
+  // let it open the save from the beginning.
+  if (app.load(save)) say('読み込みました');
+  else {
+    leaving = true;
+    location.reload();
+  }
+}
+
+function startOver(): void {
+  if (!window.confirm('この街を捨てて、新しい街を始めますか。')) return;
+  clearSave();
+  leaving = true;
+  location.reload();
+}
+
+// Autosaved when the tab goes away, which is when a city is actually lost.
+// Not on a timer: a save that happens while the player is mid-thought is a
+// save they did not ask for.
+window.addEventListener('pagehide', () => saveNow());
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') saveNow();
+});
 
 function setMode(mode: ToolMode): void {
   app.setMode(mode);
@@ -159,6 +222,15 @@ window.addEventListener('keydown', (e) => {
   if (key === 'shift') app.modifiers.straight = true;
   if (key === 'control') app.modifiers.noSnap = true;
 
+  // Ctrl+S saves, as it does everywhere else. Taken from the browser, which
+  // would otherwise offer to save the page itself.
+  if (key === 's' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    saveNow(true);
+    return;
+  }
+  if (e.ctrlKey || e.metaKey) return;
+
   if (key === 'tab') {
     e.preventDefault();
     app.setView(app.view === '3d' ? 'plan' : '3d');
@@ -183,7 +255,7 @@ window.addEventListener('keydown', (e) => {
   }
   if (key === ' ') {
     e.preventDefault();
-    app.sim.speed = app.sim.speed === 0 ? 2 : 0;
+    app.sim.speed = app.sim.speed === 0 ? DEFAULT_SPEED : 0;
     return;
   }
   if (e.key === 'PageUp' || e.key === 'PageDown') {
@@ -311,6 +383,11 @@ function buildHelp(body: HTMLElement): void {
         + 'PageUp / PageDown で敷設高さを 3m ずつ変え、高架・トンネルにします。'),
       note('既存の線形の端や途中を指すと、位置・接線・勾配を引き継いで接続します。'
         + '線路では曲率も引き継ぎ、分岐は接線に沿ったものだけを置きます。'),
+    ]),
+    section('街', [
+      note('「保存」でこのブラウザに街を保存します (Ctrl+S)。'
+        + 'タブを閉じるときにも自動で保存します。'),
+      note('「読込」で保存した街に戻り、「新規」で保存を捨てて新しい街を始めます。'),
     ]),
     section('モード', [
       note('B 敷設 / T 駅 / Z 区画 / L 路線 / X 撤去 / V 確認。'),
